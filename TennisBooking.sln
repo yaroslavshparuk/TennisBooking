@@ -1,0 +1,21 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{3D084251-DB13-40CE-BBD7-D0065EB6FFA6}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TennisBooking", "src\TennisBooking\TennisBooking.csproj", "{FC022931-FF15-4167-A794-DFBE05EAB2DC}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{FC022931-FF15-4167-A794-DFBE05EAB2DC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FC022931-FF15-4167-A794-DFBE05EAB2DC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FC022931-FF15-4167-A794-DFBE05EAB2DC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FC022931-FF15-4167-A794-DFBE05EAB2DC}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{FC022931-FF15-4167-A794-DFBE05EAB2DC} = {3D084251-DB13-40CE-BBD7-D0065EB6FFA6}
+	EndGlobalSection
+EndGlobal
