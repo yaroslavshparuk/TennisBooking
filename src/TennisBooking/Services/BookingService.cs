@@ -39,8 +39,9 @@ public class BookingService {
             _logger.LogError("UserConfig is null");
             return;
         }
-        var today = DateTimeOffset.Now;
-        var startTime = new DateTime(today.Year, today.Month, today.Day, userConfig.Hour, 0, 0);
+        var bookingDay = DateTimeOffset.UtcNow.AddDays(14);
+        var tz = TimeZoneInfo.FindSystemTimeZoneById("Europe/Kyiv");
+        var startTime = new DateTimeOffset(bookingDay.Year, bookingDay.Month, bookingDay.Day, userConfig.Hour, 0, 0, 0, tz.GetUtcOffset(bookingDay));
         if (startTime.DayOfWeek != userConfig.DayOfWeek) {
              _logger.LogError("Today is wrong day of week for booking");
              return;
@@ -155,7 +156,9 @@ public class BookingService {
                 $"{CsrfCookieName}={bookingInfo.CsrfCookie}; " +
                 $"{ApplicationCookieName}={bookingInfo.ApplicationCookie}");
             var bookResp = await client.SendAsync(bookReq, ct);
-            _logger.LogInformation("Response from Skedda {resp}", await bookResp.Content.ReadAsStringAsync());
+            if (!bookResp.IsSuccessStatusCode) {
+                throw new HttpRequestException($"Response from Skedda {await bookResp.Content.ReadAsStringAsync()}");
+            }
             bookResp.EnsureSuccessStatusCode();
             _logger.LogInformation("Booked court for user {ConfigId}", bookingInfo.UserConfig.Username);
         }
