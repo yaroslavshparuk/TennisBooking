@@ -24,14 +24,17 @@ public class BookingService {
     private readonly ILogger<BookingService> _logger;
     private readonly SkeddaOptions _opts;
     private readonly IBackgroundJobClient _backgroundJobClient;
+    private readonly TelegramService _telegram;
 
     public BookingService(
         ILogger<BookingService> logger,
         IOptions<SkeddaOptions> opts,
+        TelegramService telegram,
         IBackgroundJobClient backgroundJobClient) {
         _logger = logger;
         _opts = opts.Value;
         _backgroundJobClient = backgroundJobClient;
+        _telegram = telegram;
     }
 
     public async Task Preparation(UserConfig userConfig, CancellationToken ct) {
@@ -126,6 +129,7 @@ public class BookingService {
                 RequestVerificationToken = requestVerificationToken,
                 CsrfCookie = csrfCookie,
                 ApplicationCookie = applicationCookie,
+                StartTime = startTime,
             };
             _backgroundJobClient.Schedule<BookingService>(x => x.Booking(bookingInfo, ct), startTime.AddDays(-14));
         }
@@ -140,7 +144,6 @@ public class BookingService {
             _logger.LogError("BookingInfo is null");
             return;
         }
-
         try {
             var baseUri = new Uri(_opts.ApiBaseUrl);
             using var client = new HttpClient { BaseAddress = baseUri };
@@ -161,6 +164,12 @@ public class BookingService {
             }
             bookResp.EnsureSuccessStatusCode();
             _logger.LogInformation("Booked court for user {ConfigId}", bookingInfo.UserConfig.Username);
+            var ukrainian = new CultureInfo("uk-UA");
+            var dayAndDate = bookingInfo.StartTime.ToString("dddd d MMMM", ukrainian);
+            var startTime = bookingInfo.StartTime.ToString("HH:mm", ukrainian);
+            var endTime = bookingInfo.StartTime.AddHours(1).ToString("HH:mm", ukrainian);
+            var msg = $"🎾 Забронював тенісний корт в Галактиці, {dayAndDate}, {startTime}–{endTime}";
+            await _telegram.NotifyAsync(msg);
         }
         catch (Exception ex) {
             _logger.LogError(ex, "Failed to book court for user {ConfigId}", bookingInfo.UserConfig.Username);

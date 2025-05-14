@@ -14,6 +14,7 @@ builder.Services.AddHttpClient<BookingService>(client => {
     var opts = skeddaConfig.Get<SkeddaOptions>();
     client.BaseAddress = new Uri(opts.ApiBaseUrl);
 });
+builder.Services.AddHttpClient<TelegramService>();
 
 var connString = builder.Configuration.GetConnectionString("Default")
                  ?? throw new InvalidOperationException("Connection string 'Default' not found.");
@@ -36,7 +37,7 @@ builder.Services.AddHangfireServer(options =>
     options.SchedulePollingInterval = TimeSpan.FromMilliseconds(100);
 });
 builder.Services.AddScoped<BookingService>();
-
+builder.Services.AddScoped<TelegramService>();
 builder.Services.AddControllers();
 
 var app = builder.Build();

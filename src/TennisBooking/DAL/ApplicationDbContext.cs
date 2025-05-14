@@ -9,4 +9,5 @@ public class ApplicationDbContext : DbContext
         : base(options) { }
 
     public DbSet<UserConfig> UserConfigs { get; set; }
+    public DbSet<TelegramConfig> TelegramConfigs { get; set; }
 }
