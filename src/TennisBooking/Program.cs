@@ -1,6 +1,7 @@
 ﻿using Hangfire;
 using Hangfire.PostgreSql;
 using Microsoft.EntityFrameworkCore;
+using TennisBooking.Auth;
 using TennisBooking.DAL;
 using TennisBooking.Options;
 using TennisBooking.Services;
@@ -41,7 +42,14 @@ builder.Services.AddControllers();
 var app = builder.Build();
 
 app.UseRouting();
-app.UseHangfireDashboard();
+
+app.UseHangfireDashboard("/hangfire", new DashboardOptions
+{
+    Authorization = new[]
+    {
+        new HangfireBasicAuthFilter(builder.Configuration["Hangfire:DashboardUser"], builder.Configuration["Hangfire:DashboardPass"])
+    }
+});
 app.UseEndpoints(endpoints => {
     endpoints.MapControllers();
     endpoints.MapHangfireDashboard();
