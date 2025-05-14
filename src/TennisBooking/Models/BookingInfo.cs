@@ -11,4 +11,6 @@ public class BookingInfo {
     public string ApplicationCookie { get; set; }
 
     public object Body { get; set; }
+
+    public DateTimeOffset StartTime { get; set; }
 }
