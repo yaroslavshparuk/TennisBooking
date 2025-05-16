@@ -1,12 +1,15 @@
 ﻿using Hangfire;
 using Hangfire.PostgreSql;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using TennisBooking.Auth;
 using TennisBooking.DAL;
+using TennisBooking.HealthChecks;
 using TennisBooking.Options;
 using TennisBooking.Services;
 
@@ -43,6 +46,16 @@ builder.Services.AddHangfireServer(options =>
 builder.Services.AddScoped<BookingService>();
 builder.Services.AddScoped<TelegramService>();
 builder.Services.AddControllers();
+builder.Services.AddHealthChecks()
+    .AddNpgSql(
+        builder.Configuration.GetConnectionString("Default"),
+        name: "postgres",
+        failureStatus: HealthStatus.Degraded,
+        tags: new[] { "db", "sql", "postgres" }
+    ).AddCheck<PreparationHealthCheck>(
+         "preparation",
+         failureStatus: HealthStatus.Unhealthy,
+         tags: new[] { "service", "custom" });;
 
 var resourceBuilder = ResourceBuilder.CreateDefault()
     .AddService(serviceName: builder.Configuration["OpenTelemetry:ServiceName"], serviceVersion: "1.0.0");
@@ -78,7 +91,6 @@ builder.Logging.AddOpenTelemetry(logging =>
 var app = builder.Build();
 
 app.UseRouting();
-
 app.UseHangfireDashboard("/hangfire", new DashboardOptions
 {
     Authorization = new[]
@@ -89,14 +101,16 @@ app.UseHangfireDashboard("/hangfire", new DashboardOptions
 app.UseEndpoints(endpoints => {
     endpoints.MapControllers();
     endpoints.MapHangfireDashboard();
+    endpoints.MapHealthChecks("/health");
 });
+//app.MapHealthChecks("/health");
 using (var scope = app.Services.CreateScope()) {
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
     var configs = db.UserConfigs.AsNoTracking().ToList();
     foreach (var cfg in configs) {
         RecurringJob.AddOrUpdate<BookingService>(
             cfg.Username,
-            x => x.Preparation(cfg, CancellationToken.None),
+            x => x.Preparation(cfg, true, CancellationToken.None),
             Cron.Weekly(cfg.DayOfWeek, cfg.Hour - 1, 59),
             TimeZoneInfo.FindSystemTimeZoneById("Europe/Kyiv")
         );
