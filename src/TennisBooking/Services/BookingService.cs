@@ -37,7 +37,7 @@ public class BookingService {
         _telegram = telegram;
     }
 
-    public async Task Preparation(UserConfig userConfig, CancellationToken ct) {
+    public async Task Preparation(UserConfig userConfig, bool scheduleBookingJob, CancellationToken ct) {
         if (userConfig == null) {
             _logger.LogError("UserConfig is null");
             return;
@@ -45,11 +45,6 @@ public class BookingService {
         var bookingDay = DateTimeOffset.UtcNow.AddDays(14);
         var tz = TimeZoneInfo.FindSystemTimeZoneById("Europe/Kyiv");
         var startTime = new DateTimeOffset(bookingDay.Year, bookingDay.Month, bookingDay.Day, userConfig.Hour, 0, 0, 0, tz.GetUtcOffset(bookingDay));
-        if (startTime.DayOfWeek != userConfig.DayOfWeek) {
-             _logger.LogError("Today is wrong day of week for booking");
-             return;
-        }
-
         try {
             var handler = new HttpClientHandler { CookieContainer = new CookieContainer() };
             var baseUri = new Uri(_opts.ApiBaseUrl);
@@ -131,7 +126,9 @@ public class BookingService {
                 ApplicationCookie = applicationCookie,
                 StartTime = startTime,
             };
-            _backgroundJobClient.Schedule<BookingService>(x => x.Booking(bookingInfo, ct), startTime.AddDays(-14));
+            if (scheduleBookingJob) {
+                _backgroundJobClient.Schedule<BookingService>(x => x.Booking(bookingInfo, ct), startTime.AddDays(-14));
+            }
         }
         catch (Exception ex) {
             _logger.LogError(ex, "Failed to book court for user {ConfigId}", userConfig.Username);
