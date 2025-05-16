@@ -1,6 +1,10 @@
 ﻿using Hangfire;
 using Hangfire.PostgreSql;
 using Microsoft.EntityFrameworkCore;
+using OpenTelemetry.Logs;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using TennisBooking.Auth;
 using TennisBooking.DAL;
 using TennisBooking.Options;
@@ -39,6 +43,37 @@ builder.Services.AddHangfireServer(options =>
 builder.Services.AddScoped<BookingService>();
 builder.Services.AddScoped<TelegramService>();
 builder.Services.AddControllers();
+
+var resourceBuilder = ResourceBuilder.CreateDefault()
+    .AddService(serviceName: builder.Configuration["OpenTelemetry:ServiceName"], serviceVersion: "1.0.0");
+var otlpEndpoint = new Uri(builder.Configuration["OpenTelemetry:Endpoint"]);
+
+var otelBuilder = builder.Services.AddOpenTelemetry();
+otelBuilder.WithTracing(tracing =>
+{
+    tracing
+        .SetResourceBuilder(resourceBuilder)
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddOtlpExporter(o => o.Endpoint = otlpEndpoint);
+});
+otelBuilder.WithMetrics(metrics =>
+{
+    metrics
+        .SetResourceBuilder(resourceBuilder)
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddOtlpExporter(o => o.Endpoint = otlpEndpoint);
+});
+
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
+builder.Logging.AddOpenTelemetry(logging =>
+{
+    logging
+        .SetResourceBuilder(resourceBuilder)
+        .AddOtlpExporter(o => o.Endpoint = otlpEndpoint);
+});
 
 var app = builder.Build();
 
