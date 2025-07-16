@@ -1,6 +1,5 @@
 ﻿using Hangfire;
 using Hangfire.PostgreSql;
-using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using OpenTelemetry.Logs;
@@ -32,16 +31,16 @@ builder.Services.AddHangfire(config => config
     .UseSimpleAssemblyNameTypeSerializer()
     .UseRecommendedSerializerSettings()
     .UsePostgreSqlStorage(connString,
-        new PostgreSqlStorageOptions { SchemaName = "hangfire", QueuePollInterval = TimeSpan.FromSeconds(15) })
+        new PostgreSqlStorageOptions { SchemaName = "hangfire", QueuePollInterval = TimeSpan.FromSeconds(5) })
     .UseFilter(new AutomaticRetryAttribute
     {
-        Attempts        = 3,
-        DelaysInSeconds = new[] { 2, 5, 10 }
+        Attempts        = 5,
+        DelaysInSeconds = new[] { 1, 1, 1, 1, 2 }
     })
 );
 builder.Services.AddHangfireServer(options =>
 {
-    options.SchedulePollingInterval = TimeSpan.FromMilliseconds(100);
+    options.SchedulePollingInterval = TimeSpan.FromMilliseconds(10);
 });
 builder.Services.AddScoped<BookingService>();
 builder.Services.AddScoped<TelegramService>();
@@ -103,7 +102,6 @@ app.UseEndpoints(endpoints => {
     endpoints.MapHangfireDashboard();
     endpoints.MapHealthChecks("/health");
 });
-//app.MapHealthChecks("/health");
 using (var scope = app.Services.CreateScope()) {
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
     var configs = db.UserConfigs.AsNoTracking().ToList();
