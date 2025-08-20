@@ -34,8 +34,8 @@ builder.Services.AddHangfire(config => config
         new PostgreSqlStorageOptions { SchemaName = "hangfire", QueuePollInterval = TimeSpan.FromSeconds(5) })
     .UseFilter(new AutomaticRetryAttribute
     {
-        Attempts        = 5,
-        DelaysInSeconds = new[] { 1, 1, 1, 1, 2 }
+        Attempts        = 3,
+        DelaysInSeconds = new[] { 0, 0, 0 }
     })
 );
 builder.Services.AddHangfireServer(options =>
@@ -57,7 +57,10 @@ builder.Services.AddHealthChecks()
          tags: new[] { "service", "custom" });;
 
 var resourceBuilder = ResourceBuilder.CreateDefault()
-    .AddService(serviceName: builder.Configuration["OpenTelemetry:ServiceName"], serviceVersion: "1.0.0");
+    .AddService(serviceName: builder.Configuration["OpenTelemetry:ServiceName"], serviceVersion: "1.0.0")
+    .AddTelemetrySdk()
+    .AddEnvironmentVariableDetector();
+
 var otlpEndpoint = new Uri(builder.Configuration["OpenTelemetry:Endpoint"]);
 
 var otelBuilder = builder.Services.AddOpenTelemetry();
@@ -65,8 +68,17 @@ otelBuilder.WithTracing(tracing =>
 {
     tracing
         .SetResourceBuilder(resourceBuilder)
-        .AddAspNetCoreInstrumentation()
-        .AddHttpClientInstrumentation()
+        .AddAspNetCoreInstrumentation(options =>
+        {
+            options.RecordException = true;
+        })
+        .AddHttpClientInstrumentation(options =>
+        {
+            options.RecordException = true;
+        })
+        .AddSource("TennisBooking.*")
+        .AddSource("Hangfire.*")
+        .SetSampler(new TraceIdRatioBasedSampler(1.0))
         .AddOtlpExporter(o => o.Endpoint = otlpEndpoint);
 });
 otelBuilder.WithMetrics(metrics =>
@@ -75,6 +87,9 @@ otelBuilder.WithMetrics(metrics =>
         .SetResourceBuilder(resourceBuilder)
         .AddAspNetCoreInstrumentation()
         .AddHttpClientInstrumentation()
+        .AddRuntimeInstrumentation()
+        .AddMeter("TennisBooking.*")
+        .AddMeter("Hangfire.*")
         .AddOtlpExporter(o => o.Endpoint = otlpEndpoint);
 });
 
