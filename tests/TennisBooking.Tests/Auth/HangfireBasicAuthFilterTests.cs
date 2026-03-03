@@ -2,7 +2,6 @@ using System.Text;
 using FluentAssertions;
 using Hangfire.Dashboard;
 using Microsoft.AspNetCore.Http;
-using Moq;
 using TennisBooking.Auth;
 
 namespace TennisBooking.Tests.Auth;
@@ -14,6 +13,19 @@ public class HangfireBasicAuthFilterTests
 
     private readonly HangfireBasicAuthFilter _filter = new(ValidUser, ValidPass);
 
+    private class TestDashboardContext : DashboardContext
+    {
+        private readonly HttpContext _httpContext;
+
+        public TestDashboardContext(HttpContext httpContext)
+            : base(null!, null!, null!)
+        {
+            _httpContext = httpContext;
+        }
+
+        public override HttpContext GetHttpContext() => _httpContext;
+    }
+
     private static DashboardContext CreateDashboardContext(string? authorizationHeader = null)
     {
         var httpContext = new DefaultHttpContext();
@@ -22,9 +34,7 @@ public class HangfireBasicAuthFilterTests
             httpContext.Request.Headers["Authorization"] = authorizationHeader;
         }
 
-        var mock = new Mock<DashboardContext>();
-        mock.Setup(x => x.GetHttpContext()).Returns(httpContext);
-        return mock.Object;
+        return new TestDashboardContext(httpContext);
     }
 
     private static string EncodeBasicAuth(string user, string pass)
