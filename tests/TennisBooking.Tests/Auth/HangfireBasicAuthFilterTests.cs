@@ -23,6 +23,7 @@ public class HangfireBasicAuthFilterTests
             httpContext.Request.Headers["Authorization"] = authorizationHeader;
         }
 
+        httpContext.RequestServices = new Mock<IServiceProvider>().Object;
         var storage = new Mock<JobStorage>();
         return new AspNetCoreDashboardContext(storage.Object, new DashboardOptions(), httpContext);
     }
