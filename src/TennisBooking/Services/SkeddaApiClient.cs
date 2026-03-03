@@ -100,7 +100,7 @@ public class SkeddaApiClient : ISkeddaApiClient
         }
     }
 
-    internal static string GetRequestVerificationToken(string html)
+    public static string GetRequestVerificationToken(string html)
     {
         var match = Regex.Match(
             html,

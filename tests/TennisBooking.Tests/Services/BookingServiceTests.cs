@@ -37,7 +37,7 @@ public class BookingServiceTests
 
     public BookingServiceTests()
     {
-        _options = Options.Create(new SkeddaOptions { ApiBaseUrl = "https://fake-skedda.example.com" });
+        _options = Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = "https://fake-skedda.example.com" });
 
         var httpClient = new HttpClient();
         var db = TestDbContextFactory.Create();
