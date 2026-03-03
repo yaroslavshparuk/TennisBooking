@@ -16,11 +16,8 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddEnvironmentVariables();
 var skeddaConfig = builder.Configuration.GetSection("SkeddaConfig");
 builder.Services.Configure<SkeddaOptions>(skeddaConfig);
-builder.Services.AddHttpClient<BookingService>(client => {
-    var opts = skeddaConfig.Get<SkeddaOptions>();
-    client.BaseAddress = new Uri(opts.ApiBaseUrl);
-});
 builder.Services.AddHttpClient<TelegramService>();
+builder.Services.AddScoped<ISkeddaApiClient, SkeddaApiClient>();
 
 var connString = builder.Configuration.GetConnectionString("Default")
                  ?? throw new InvalidOperationException("Connection string 'Default' not found.");

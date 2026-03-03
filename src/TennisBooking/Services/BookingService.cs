@@ -1,165 +1,130 @@
-﻿namespace TennisBooking.Services;
+namespace TennisBooking.Services;
 
 using System.Globalization;
 using Models;
 using Hangfire;
 using DAL.Models;
-using System.Text.RegularExpressions;
-using System.Net;
 using Microsoft.Extensions.Logging;
 using Options;
-using System.Text;
-using Newtonsoft.Json;
 using Microsoft.Extensions.Options;
 
-public class BookingService {
-    private const string AccountLoginPath = "/account/login";
-    private const string LoginPath = "/logins";
-    private const string GetBookingsPath = "/booking";
-    private const string BookingPath = "/bookings";
-    private const string CsrfHeaderName = "x-skedda-requestverificationtoken";
-    private const string CookieHeaderName = "Cookie";
-    private const string ApplicationCookieName = "X-Skedda-ApplicationCookie";
-    private const string CsrfCookieName = "X-Skedda-RequestVerificationCookie";
+public class BookingService
+{
     private readonly ILogger<BookingService> _logger;
     private readonly SkeddaOptions _opts;
     private readonly IBackgroundJobClient _backgroundJobClient;
     private readonly TelegramService _telegram;
+    private readonly ISkeddaApiClient _skeddaApiClient;
 
     public BookingService(
         ILogger<BookingService> logger,
         IOptions<SkeddaOptions> opts,
         TelegramService telegram,
-        IBackgroundJobClient backgroundJobClient) {
+        IBackgroundJobClient backgroundJobClient,
+        ISkeddaApiClient skeddaApiClient)
+    {
         _logger = logger;
         _opts = opts.Value;
         _backgroundJobClient = backgroundJobClient;
         _telegram = telegram;
+        _skeddaApiClient = skeddaApiClient;
     }
 
-    public async Task Preparation(UserConfig userConfig, bool scheduleBookingJob, CancellationToken ct) {
-        if (userConfig == null) {
+    public virtual async Task Preparation(UserConfig userConfig, bool scheduleBookingJob, CancellationToken ct)
+    {
+        if (userConfig == null)
+        {
             _logger.LogError("UserConfig is null");
             return;
         }
+
         var bookingDay = DateTimeOffset.UtcNow.AddDays(14);
         var tz = TimeZoneInfo.FindSystemTimeZoneById("Europe/Kyiv");
-        var startTime = new DateTimeOffset(bookingDay.Year, bookingDay.Month, bookingDay.Day, userConfig.Hour, 0, 0, 0, tz.GetUtcOffset(bookingDay));
-        try {
-            var handler = new HttpClientHandler { CookieContainer = new CookieContainer() };
-            var baseUri = new Uri(_opts.ApiBaseUrl);
-            using var client = new HttpClient(handler) { BaseAddress = baseUri };
+        var startTime = new DateTimeOffset(bookingDay.Year, bookingDay.Month, bookingDay.Day,
+            userConfig.Hour, 0, 0, 0, tz.GetUtcOffset(bookingDay));
 
-            var openLoginPage = await client.GetAsync(AccountLoginPath, ct);
-            openLoginPage.EnsureSuccessStatusCode();
-            var loginHtml = await openLoginPage.Content.ReadAsStringAsync(ct);
-            var requestVerificationToken = GetRequestVerificationToken(loginHtml);
-            var loginReq = new HttpRequestMessage(HttpMethod.Post, LoginPath);
-            loginReq.Headers.Add(CsrfHeaderName, requestVerificationToken);
-            loginReq.Headers.Add(CookieHeaderName,
-                $"{CsrfCookieName}={handler.CookieContainer.GetCookies(baseUri)[CsrfCookieName].Value}");
+        try
+        {
+            var session = await _skeddaApiClient.LoginAndGetSessionAsync(
+                userConfig.Username, userConfig.Password, ct);
 
-            loginReq.Content = new StringContent(
-                JsonConvert.SerializeObject(new {
-                    login = new {
-                        arbitraryerrors = (object)null,
-                        username = userConfig.Username,
-                        password = userConfig.Password,
-                        rememberMe = false
-                    }
-                }),
-                Encoding.UTF8,
-                "application/json"
-            );
-            var loginResp = await client.SendAsync(loginReq, ct);
-            loginResp.EnsureSuccessStatusCode();
-
-            var csrfCookie = handler.CookieContainer.GetCookies(baseUri)[CsrfCookieName].Value;
-
-            var applicationCookie = handler.CookieContainer.GetCookies(baseUri)[ApplicationCookieName].Value;
-            var getBookingsReq = new HttpRequestMessage(HttpMethod.Get, GetBookingsPath);
-            getBookingsReq.Headers.Add(CsrfHeaderName, requestVerificationToken);
-            getBookingsReq.Headers.Add(CookieHeaderName,
-                $"{CsrfCookieName}={csrfCookie}; " +
-                $"{ApplicationCookieName}={applicationCookie}");
-            var getBookingsResp = await client.SendAsync(getBookingsReq, ct);
-            getBookingsResp.EnsureSuccessStatusCode();
-            requestVerificationToken = GetRequestVerificationToken(await getBookingsResp.Content.ReadAsStringAsync(ct));
-
-            var bookingBody = new {
-                booking = new {
+            var bookingBody = new
+            {
+                booking = new
+                {
                     addConference = false,
                     allowInviteOthers = false,
-                    arbitraryerrors = (object)null,
-                    attendees = new int[0],
+                    arbitraryerrors = (object?)null,
+                    attendees = Array.Empty<int>(),
                     availabilityStatus = 1,
-                    chargeTransactionId = (object)null,
-                    checkInAudits = (object)null,
-                    createdDate = (object)null,
-                    customFields = new int[0],
-                    decoupleBooking = (object)null,
-                    decoupleDate = (object)null,
+                    chargeTransactionId = (object?)null,
+                    checkInAudits = (object?)null,
+                    createdDate = (object?)null,
+                    customFields = Array.Empty<int>(),
+                    decoupleBooking = (object?)null,
+                    decoupleDate = (object?)null,
                     end = startTime.AddHours(1).ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture),
-                    endOfLastOccurrence = (object)null,
+                    endOfLastOccurrence = (object?)null,
                     hideAttendees = true,
                     lockInMargin = 1,
                     paymentStatus = 0,
-                    piId = (object)null,
+                    piId = (object?)null,
                     price = 0,
-                    recurrenceRule = (object)null,
+                    recurrenceRule = (object?)null,
                     spaces = new[] { userConfig.ResourceId },
                     start = startTime.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture),
                     stripPrivateEventDetails = false,
-                    syncType = (object)null,
-                    title = (object)null,
+                    syncType = (object?)null,
+                    title = (object?)null,
                     type = 1,
                     unrecognizedOrganizer = false,
                     venue = userConfig.Venue,
                     venueuser = userConfig.VenueUser
                 }
             };
-            var bookingInfo = new BookingInfo {
+
+            var bookingInfo = new BookingInfo
+            {
                 UserConfig = userConfig,
                 Body = bookingBody,
-                RequestVerificationToken = requestVerificationToken,
-                CsrfCookie = csrfCookie,
-                ApplicationCookie = applicationCookie,
+                RequestVerificationToken = session.RequestVerificationToken,
+                CsrfCookie = session.CsrfCookie,
+                ApplicationCookie = session.ApplicationCookie,
                 StartTime = startTime,
             };
-            if (scheduleBookingJob) {
-                _backgroundJobClient.Schedule<BookingService>(x => x.Booking(bookingInfo, ct), startTime.AddDays(-14));
+
+            if (scheduleBookingJob)
+            {
+                _backgroundJobClient.Schedule<BookingService>(
+                    x => x.Booking(bookingInfo, ct), startTime.AddDays(-14));
             }
         }
-        catch (Exception ex) {
+        catch (Exception ex)
+        {
             _logger.LogError(ex, "Failed to book court for user {ConfigId}", userConfig.Username);
             throw;
         }
     }
 
-    public async Task Booking(BookingInfo bookingInfo, CancellationToken ct) {
-        if (bookingInfo == null) {
+    public virtual async Task Booking(BookingInfo bookingInfo, CancellationToken ct)
+    {
+        if (bookingInfo == null)
+        {
             _logger.LogError("BookingInfo is null");
             return;
         }
-        try {
-            var baseUri = new Uri(_opts.ApiBaseUrl);
-            using var client = new HttpClient { BaseAddress = baseUri };
 
-            var bookReq = new HttpRequestMessage(HttpMethod.Post, BookingPath);
-            bookReq.Content = new StringContent(
-                JsonConvert.SerializeObject(bookingInfo.Body),
-                Encoding.UTF8,
-                "application/json"
-            );
-            bookReq.Headers.Add(CsrfHeaderName, bookingInfo.RequestVerificationToken);
-            bookReq.Headers.Add(CookieHeaderName,
-                $"{CsrfCookieName}={bookingInfo.CsrfCookie}; " +
-                $"{ApplicationCookieName}={bookingInfo.ApplicationCookie}");
-            var bookResp = await client.SendAsync(bookReq, ct);
-            if (!bookResp.IsSuccessStatusCode) {
-                throw new HttpRequestException($"Response from Skedda {await bookResp.Content.ReadAsStringAsync()}");
-            }
-            bookResp.EnsureSuccessStatusCode();
+        try
+        {
+            var session = new SkeddaSession
+            {
+                RequestVerificationToken = bookingInfo.RequestVerificationToken,
+                CsrfCookie = bookingInfo.CsrfCookie,
+                ApplicationCookie = bookingInfo.ApplicationCookie
+            };
+
+            await _skeddaApiClient.BookAsync(session, bookingInfo.Body, ct);
+
             _logger.LogInformation("Booked court for user {ConfigId}", bookingInfo.UserConfig.Username);
             var ukrainian = new CultureInfo("uk-UA");
             var dayAndDate = bookingInfo.StartTime.ToString("dddd d MMMM", ukrainian);
@@ -168,21 +133,10 @@ public class BookingService {
             var msg = $"🎾 Забронював тенісний корт в Галактиці, {dayAndDate}, {startTime}–{endTime}";
             await _telegram.NotifyAsync(msg);
         }
-        catch (Exception ex) {
+        catch (Exception ex)
+        {
             _logger.LogError(ex, "Failed to book court for user {ConfigId}", bookingInfo.UserConfig.Username);
             throw;
         }
-    }
-
-    private string GetRequestVerificationToken(string loginHtml) {
-        var match = Regex.Match(
-            loginHtml,
-            "<input\\s+name=\\\"__RequestVerificationToken\\\"\\s+type=\\\"hidden\\\"\\s+value=\\\"([^\\\"]+)\\\"",
-            RegexOptions.IgnoreCase
-        );
-        if (!match.Success)
-            throw new InvalidOperationException("__RequestVerificationToken not found in login page HTML.");
-        var requestVerificationToken = match.Groups[1].Value;
-        return requestVerificationToken;
     }
 }

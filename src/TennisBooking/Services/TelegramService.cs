@@ -22,7 +22,7 @@ public class TelegramService {
         _logger = logger;
     }
 
-    public async Task NotifyAsync(string message) {
+    public virtual async Task NotifyAsync(string message) {
         try {
             var cfg = await GetConfigAsync();
             var url = $"{BaseUrlPrefix}{cfg.BotToken}/sendMessage";
