@@ -276,8 +276,13 @@ public class UnitTests
     private static DefaultHttpContext NewHttp()
     {
         var http = new DefaultHttpContext();
-        http.RequestServices = new Microsoft.Extensions.DependencyInjection.ServiceCollection().BuildServiceProvider();
+        http.RequestServices = new NullServiceProvider();
         return http;
+    }
+
+    private sealed class NullServiceProvider : IServiceProvider
+    {
+        public object? GetService(Type serviceType) => null;
     }
 
     private sealed class DelegateHandler : HttpMessageHandler
