@@ -21,12 +21,12 @@ jobs:
         run: dotnet restore TennisBooking.sln
 
       - name: Test with 100% line coverage
-        run: >
-          dotnet test tests/TennisBooking.Tests/TennisBooking.Tests.csproj
-          --configuration Release
-          /p:CollectCoverage=true
-          /p:CoverletOutputFormat=cobertura
-          /p:Threshold=100
-          /p:ThresholdType=line
-          /p:ThresholdStat=total
-          /p:ExcludeByFile="**/Program.cs;**/Migrations/*.cs"
+        run: |
+          dotnet test tests/TennisBooking.Tests/TennisBooking.Tests.csproj \
+            --configuration Release \
+            /p:CollectCoverage=true \
+            /p:CoverletOutputFormat=cobertura \
+            /p:Threshold=100 \
+            /p:ThresholdType=line \
+            /p:ThresholdStat=total \
+            '/p:ExcludeByFile=**/Program.cs,**/Migrations/*.cs'
