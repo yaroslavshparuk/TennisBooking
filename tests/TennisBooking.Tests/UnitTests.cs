@@ -2,6 +2,8 @@ using System.Net;
 using System.Text;
 using Hangfire;
 using Hangfire.Dashboard;
+using Hangfire.Common;
+using Hangfire.States;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -53,7 +55,7 @@ public class UnitTests
         var bg = new Mock<IBackgroundJobClient>();
         bg.Setup(x => x.Create(It.IsAny<Job>(), It.IsAny<IState>())).Returns("job-id");
 
-        var svc = CreateBookingService(server.BaseUrl, out var telegramDb, bg.Object);
+        var svc = CreateBookingService(server.BaseUrl, out var telegramDb, out _, bg.Object);
         telegramDb.TelegramConfigs.Add(new TelegramConfig { BotToken = "t", ChatId = 1 });
         telegramDb.SaveChanges();
 
@@ -115,7 +117,7 @@ public class UnitTests
         var tg = new TelegramService(new HttpClient(telegramHandler), db, NullLogger<TelegramService>.Instance);
         var svc = new BookingService(
             NullLogger<BookingService>.Instance,
-            Options.Create(new SkeddaOptions { ApiBaseUrl = skedda.BaseUrl }),
+            Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = skedda.BaseUrl }),
             tg,
             Mock.Of<IBackgroundJobClient>());
 
@@ -257,16 +259,16 @@ public class UnitTests
         Hour = 10
     };
 
-    private static BookingService CreateBookingService(string apiBaseUrl, out ApplicationDbContext telegramDb, out IBackgroundJobClient bg)
+    private static BookingService CreateBookingService(string apiBaseUrl, out ApplicationDbContext telegramDb, out IBackgroundJobClient bg, IBackgroundJobClient? bgOverride = null)
     {
         var tgHandler = new DelegateHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)));
         var dbOpts = new DbContextOptionsBuilder<ApplicationDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
         telegramDb = new ApplicationDbContext(dbOpts);
         var tg = new TelegramService(new HttpClient(tgHandler), telegramDb, NullLogger<TelegramService>.Instance);
-        bg = Mock.Of<IBackgroundJobClient>();
+        bg = bgOverride ?? Mock.Of<IBackgroundJobClient>();
         return new BookingService(
             NullLogger<BookingService>.Instance,
-            Options.Create(new SkeddaOptions { ApiBaseUrl = apiBaseUrl }),
+            Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = apiBaseUrl }),
             tg,
             bg);
     }
