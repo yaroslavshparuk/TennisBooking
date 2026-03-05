@@ -28,5 +28,4 @@ jobs:
             /p:CoverletOutputFormat=cobertura \
             /p:Threshold=100 \
             /p:ThresholdType=line \
-            /p:ThresholdStat=total \
-            '/p:ExcludeByFile=**/Program.cs,**/Migrations/*.cs'
+            /p:ThresholdStat=total
