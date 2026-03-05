@@ -207,18 +207,18 @@ public class UnitTests
         var storage = new Mock<Hangfire.JobStorage>().Object;
         var options = new DashboardOptions();
 
-        var ctxNoHeader = new AspNetCoreDashboardContext(storage, options, new DefaultHttpContext());
-        Assert.False(filter.Authorize(ctxNoHeader));
+        var ctxNoHeader = NewHttp();
+        Assert.False(filter.Authorize(new AspNetCoreDashboardContext(storage, options, ctxNoHeader)));
 
-        var httpBadScheme = new DefaultHttpContext();
+        var httpBadScheme = NewHttp();
         httpBadScheme.Request.Headers["Authorization"] = "Bearer abc";
         Assert.False(filter.Authorize(new AspNetCoreDashboardContext(storage, options, httpBadScheme)));
 
-        var httpBadCreds = new DefaultHttpContext();
+        var httpBadCreds = NewHttp();
         httpBadCreds.Request.Headers["Authorization"] = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("user:nope"));
         Assert.False(filter.Authorize(new AspNetCoreDashboardContext(storage, options, httpBadCreds)));
 
-        var httpGood = new DefaultHttpContext();
+        var httpGood = NewHttp();
         httpGood.Request.Headers["Authorization"] = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("user:pass"));
         Assert.True(filter.Authorize(new AspNetCoreDashboardContext(storage, options, httpGood)));
     }
@@ -271,6 +271,13 @@ public class UnitTests
             Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = apiBaseUrl }),
             tg,
             bg);
+    }
+
+    private static DefaultHttpContext NewHttp()
+    {
+        var http = new DefaultHttpContext();
+        http.RequestServices = new Microsoft.Extensions.DependencyInjection.ServiceCollection().BuildServiceProvider();
+        return http;
     }
 
     private sealed class DelegateHandler : HttpMessageHandler
