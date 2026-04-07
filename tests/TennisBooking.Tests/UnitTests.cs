@@ -54,8 +54,9 @@ public class UnitTests
 
         var bg = new Mock<IBackgroundJobClient>();
         bg.Setup(x => x.Create(It.IsAny<Job>(), It.IsAny<IState>())).Returns("job-id");
+        var precise = new Mock<IPreciseBookingScheduler>();
 
-        var svc = CreateBookingService(server.BaseUrl, out var telegramDb, out _, bg.Object);
+        var svc = CreateBookingService(server.BaseUrl, out var telegramDb, out _, bg.Object, precise.Object);
         telegramDb.TelegramConfigs.Add(new TelegramConfig { BotToken = "t", ChatId = 1 });
         telegramDb.SaveChanges();
 
@@ -73,6 +74,7 @@ public class UnitTests
         await svc.Preparation(cfg, true, CancellationToken.None);
 
         bg.Verify(x => x.Create(It.IsAny<Job>(), It.IsAny<IState>()), Times.Once);
+        precise.Verify(x => x.ScheduleBooking(It.IsAny<BookingInfo>()), Times.Once);
     }
 
     [Fact]
@@ -119,7 +121,8 @@ public class UnitTests
             NullLogger<BookingService>.Instance,
             Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = skedda.BaseUrl }),
             tg,
-            Mock.Of<IBackgroundJobClient>());
+            Mock.Of<IBackgroundJobClient>(),
+            Mock.Of<IPreciseBookingScheduler>());
 
         var info = new BookingInfo
         {
@@ -259,18 +262,20 @@ public class UnitTests
         Hour = 10
     };
 
-    private static BookingService CreateBookingService(string apiBaseUrl, out ApplicationDbContext telegramDb, out IBackgroundJobClient bg, IBackgroundJobClient? bgOverride = null)
+    private static BookingService CreateBookingService(string apiBaseUrl, out ApplicationDbContext telegramDb, out IBackgroundJobClient bg, IBackgroundJobClient? bgOverride = null, IPreciseBookingScheduler? preciseOverride = null)
     {
         var tgHandler = new DelegateHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)));
         var dbOpts = new DbContextOptionsBuilder<ApplicationDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
         telegramDb = new ApplicationDbContext(dbOpts);
         var tg = new TelegramService(new HttpClient(tgHandler), telegramDb, NullLogger<TelegramService>.Instance);
         bg = bgOverride ?? Mock.Of<IBackgroundJobClient>();
+        var precise = preciseOverride ?? Mock.Of<IPreciseBookingScheduler>();
         return new BookingService(
             NullLogger<BookingService>.Instance,
             Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = apiBaseUrl }),
             tg,
-            bg);
+            bg,
+            precise);
     }
 
     private static DefaultHttpContext NewHttp()
