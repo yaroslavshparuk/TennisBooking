@@ -25,16 +25,19 @@ public class BookingService {
     private readonly SkeddaOptions _opts;
     private readonly IBackgroundJobClient _backgroundJobClient;
     private readonly TelegramService _telegram;
+    private readonly IPreciseBookingScheduler _preciseBookingScheduler;
 
     public BookingService(
         ILogger<BookingService> logger,
         IOptions<SkeddaOptions> opts,
         TelegramService telegram,
-        IBackgroundJobClient backgroundJobClient) {
+        IBackgroundJobClient backgroundJobClient,
+        IPreciseBookingScheduler preciseBookingScheduler) {
         _logger = logger;
         _opts = opts.Value;
         _backgroundJobClient = backgroundJobClient;
         _telegram = telegram;
+        _preciseBookingScheduler = preciseBookingScheduler;
     }
 
     public async Task Preparation(UserConfig userConfig, bool scheduleBookingJob, CancellationToken ct) {
@@ -127,7 +130,15 @@ public class BookingService {
                 StartTime = startTime,
             };
             if (scheduleBookingJob) {
-                _backgroundJobClient.Schedule<BookingService>(x => x.Booking(bookingInfo, ct), startTime.AddDays(-14));
+                var targetTime = startTime.AddDays(-14);
+                _preciseBookingScheduler.ScheduleBooking(bookingInfo);
+
+                // Fallback/recovery path in case the in-process precise timer misses the slot.
+                var fallbackRunAt = targetTime.AddSeconds(3);
+                if (fallbackRunAt < DateTimeOffset.UtcNow)
+                    fallbackRunAt = DateTimeOffset.UtcNow.AddSeconds(3);
+
+                _backgroundJobClient.Schedule<BookingService>(x => x.Booking(bookingInfo, CancellationToken.None), fallbackRunAt);
             }
         }
         catch (Exception ex) {
