@@ -227,7 +227,7 @@ public sealed class BookingPostgresIntegrationTests
         await connection.OpenAsync();
 
         await using var command = new NpgsqlCommand("""
-            select j.invocationdata, j.arguments, coalesce(s.name, '') || ' ' || coalesce(s.data, '') as statedata
+            select j.invocationdata, j.arguments, coalesce(s.name, '') || ' ' || coalesce(s.data::text, '') as statedata
             from hangfire.job j
             left join hangfire.state s on s.jobid = j.id
             order by j.id desc, s.id desc
