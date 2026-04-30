@@ -30,9 +30,18 @@ public class HangfireBasicAuthFilter : IDashboardAuthorizationFilter
             return false;
         }
 
-        var credentials = Encoding.UTF8
-            .GetString(Convert.FromBase64String(header.ToString().Substring(6)))
-            .Split(':', 2);
+        string[] credentials;
+        try
+        {
+            credentials = Encoding.UTF8
+                .GetString(Convert.FromBase64String(header.ToString().Substring(6)))
+                .Split(':', 2);
+        }
+        catch (FormatException)
+        {
+            Challenge(http);
+            return false;
+        }
 
         if (credentials.Length == 2 &&
             credentials[0] == _user &&
