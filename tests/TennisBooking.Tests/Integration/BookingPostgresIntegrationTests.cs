@@ -4,12 +4,14 @@ using System.Text;
 using Hangfire;
 using Hangfire.PostgreSql;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
 using Npgsql;
 using TennisBooking.DAL;
 using TennisBooking.DAL.Models;
+using TennisBooking.HealthChecks;
 using TennisBooking.Models;
 using TennisBooking.Options;
 using TennisBooking.Services;
@@ -146,6 +148,15 @@ public sealed class BookingPostgresIntegrationTests
         await service.BookingFallback(userConfig.Id, startTime, CancellationToken.None);
 
         Assert.Equal(1, bookingPosts);
+    }
+
+    [DockerFact]
+    public async Task NpgsqlHealthCheck_ReturnsHealthy_AgainstRunningPostgres()
+    {
+        await using var postgres = await StartPostgresAsync();
+        var hc = new NpgsqlHealthCheck(postgres.GetConnectionString());
+        var result = await hc.CheckHealthAsync(new HealthCheckContext(), CancellationToken.None);
+        Assert.Equal(HealthStatus.Healthy, result.Status);
     }
 
     private static async Task<PostgreSqlContainer> StartPostgresAsync()

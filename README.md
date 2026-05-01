@@ -9,7 +9,7 @@ Application for automated tennis court booking in Skedda with Telegram notificat
 
 ## Requirements
 
-- .NET 9.0
+- .NET 10.0
 - PostgreSQL database
 - Docker (for deployment)
 
@@ -24,9 +24,12 @@ Application for automated tennis court booking in Skedda with Telegram notificat
 
 ## Deployment
 
-Use the provided deployment script:
+Build and run the container image:
 ```bash
-./deploy.sh
+docker build -t tennisbooking src/TennisBooking
+docker run -d --name tennisbooking -p 5000:5000 \
+  -e ConnectionStrings__Default=... \
+  tennisbooking
 ```
 
 The application will be available at `http://localhost:5000` (or port 80 when deployed).
