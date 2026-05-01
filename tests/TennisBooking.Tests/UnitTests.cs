@@ -71,10 +71,94 @@ public class UnitTests
             Hour = 10
         };
 
+        Job? scheduledJob = null;
+        bg.Invocations.Clear();
+        bg.Setup(x => x.Create(It.IsAny<Job>(), It.IsAny<IState>()))
+            .Callback<Job, IState>((job, _) => scheduledJob = job)
+            .Returns("job-id");
+
         await svc.Preparation(cfg, true, CancellationToken.None);
 
         bg.Verify(x => x.Create(It.IsAny<Job>(), It.IsAny<IState>()), Times.Once);
         precise.Verify(x => x.ScheduleBooking(It.IsAny<BookingInfo>()), Times.Once);
+        Assert.NotNull(scheduledJob);
+        Assert.Equal(nameof(BookingService.BookingFallback), scheduledJob!.Method.Name);
+        Assert.DoesNotContain(scheduledJob.Args, arg => arg is BookingInfo);
+    }
+
+    [Fact]
+    public async Task Booking_DoesNotPostTwice_ForSameSlot()
+    {
+        using var skedda = new FakeSkeddaServer();
+        var bookingPosts = 0;
+        skedda.Enqueue(HttpMethod.Post, "/bookings", ctx =>
+        {
+            bookingPosts++;
+            ctx.Response.StatusCode = 200;
+            return "{}";
+        });
+
+        var svc = CreateBookingService(skedda.BaseUrl, out _, out _);
+        var info = new BookingInfo
+        {
+            UserConfig = BasicConfig(),
+            Body = new { },
+            RequestVerificationToken = "t",
+            CsrfCookie = "c",
+            ApplicationCookie = "a",
+            StartTime = new DateTimeOffset(2030, 1, 1, 10, 0, 0, TimeSpan.Zero)
+        };
+
+        await svc.Booking(info, CancellationToken.None);
+        await svc.Booking(info, CancellationToken.None);
+
+        Assert.Equal(1, bookingPosts);
+    }
+
+    [Fact]
+    public async Task BookingFallback_LoadsConfigAndBooksWithoutSensitiveHangfireArgs()
+    {
+        using var server = new FakeSkeddaServer();
+        server.Enqueue(HttpMethod.Get, "/account/login", ctx =>
+        {
+            ctx.Response.StatusCode = 200;
+            ctx.Response.Headers.Add("Set-Cookie", "X-Skedda-RequestVerificationCookie=csrf-cookie; Path=/");
+            return "<input name=\"__RequestVerificationToken\" type=\"hidden\" value=\"token-1\" />";
+        });
+        server.Enqueue(HttpMethod.Post, "/logins", ctx =>
+        {
+            ctx.Response.StatusCode = 200;
+            ctx.Response.Headers.Add("Set-Cookie", "X-Skedda-ApplicationCookie=app-cookie; Path=/");
+            return "{}";
+        });
+        server.Enqueue(HttpMethod.Get, "/booking", ctx =>
+        {
+            ctx.Response.StatusCode = 200;
+            return "<input name=\"__RequestVerificationToken\" type=\"hidden\" value=\"token-2\" />";
+        });
+        server.Enqueue(HttpMethod.Post, "/bookings", ctx =>
+        {
+            ctx.Response.StatusCode = 200;
+            return "{}";
+        });
+
+        var svc = CreateBookingService(server.BaseUrl, out var db, out _);
+        var cfg = BasicConfig();
+        cfg.Id = 42;
+        db.UserConfigs.Add(cfg);
+        db.SaveChanges();
+
+        var startTime = new DateTimeOffset(2030, 1, 1, cfg.Hour, 0, 0, TimeSpan.Zero);
+        await svc.BookingFallback(cfg.Id, startTime, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task BookingFallback_Throws_WhenUserConfigMissing()
+    {
+        var svc = CreateBookingService("http://127.0.0.1:65534", out _, out _);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            svc.BookingFallback(999, DateTimeOffset.UtcNow, CancellationToken.None));
     }
 
     [Fact]
@@ -120,6 +204,7 @@ public class UnitTests
         var svc = new BookingService(
             NullLogger<BookingService>.Instance,
             Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = skedda.BaseUrl }),
+            db,
             tg,
             Mock.Of<IBackgroundJobClient>(),
             Mock.Of<IPreciseBookingScheduler>());
@@ -221,6 +306,10 @@ public class UnitTests
         httpBadCreds.Request.Headers["Authorization"] = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("user:nope"));
         Assert.False(filter.Authorize(new AspNetCoreDashboardContext(storage, options, httpBadCreds)));
 
+        var httpBadBase64 = NewHttp();
+        httpBadBase64.Request.Headers["Authorization"] = "Basic not-base64";
+        Assert.False(filter.Authorize(new AspNetCoreDashboardContext(storage, options, httpBadBase64)));
+
         var httpGood = NewHttp();
         httpGood.Request.Headers["Authorization"] = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("user:pass"));
         Assert.True(filter.Authorize(new AspNetCoreDashboardContext(storage, options, httpGood)));
@@ -273,6 +362,7 @@ public class UnitTests
         return new BookingService(
             NullLogger<BookingService>.Instance,
             Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = apiBaseUrl }),
+            telegramDb,
             tg,
             bg,
             precise);
