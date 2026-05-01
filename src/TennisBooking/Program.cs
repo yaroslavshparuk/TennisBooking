@@ -33,16 +33,16 @@ builder.Services.AddHangfire(config => config
     .UseSimpleAssemblyNameTypeSerializer()
     .UseRecommendedSerializerSettings()
     .UsePostgreSqlStorage(connString,
-        new PostgreSqlStorageOptions { SchemaName = "hangfire", QueuePollInterval = TimeSpan.FromSeconds(5) })
+        new PostgreSqlStorageOptions { SchemaName = "hangfire", QueuePollInterval = TimeSpan.FromSeconds(1) })
     .UseFilter(new AutomaticRetryAttribute
     {
-        Attempts        = 3,
-        DelaysInSeconds = new[] { 0, 0, 0 }
+        Attempts        = 2,
+        DelaysInSeconds = new[] { 2, 5 }
     })
 );
 builder.Services.AddHangfireServer(options =>
 {
-    options.SchedulePollingInterval = TimeSpan.FromMilliseconds(10);
+    options.SchedulePollingInterval = TimeSpan.FromSeconds(1);
 });
 builder.Services.AddSingleton<PreciseBookingScheduler>();
 builder.Services.AddSingleton<IPreciseBookingScheduler>(sp => sp.GetRequiredService<PreciseBookingScheduler>());
