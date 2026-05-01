@@ -1,4 +1,4 @@
-﻿using Hangfire;
+using Hangfire;
 using Hangfire.PostgreSql;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -42,6 +42,7 @@ builder.Services.AddHangfire(config => config
 );
 builder.Services.AddHangfireServer(options =>
 {
+    options.WorkerCount = 2;
     options.SchedulePollingInterval = TimeSpan.FromSeconds(1);
 });
 builder.Services.AddSingleton<PreciseBookingScheduler>();
