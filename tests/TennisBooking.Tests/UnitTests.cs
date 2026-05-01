@@ -106,7 +106,7 @@ public class UnitTests
             RequestVerificationToken = "t",
             CsrfCookie = "c",
             ApplicationCookie = "a",
-            StartTime = new DateTimeOffset(2030, 1, 1, 10, 0, 0, TimeSpan.Zero)
+            StartTime = new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero)
         };
 
         await svc.Booking(info, CancellationToken.None);
@@ -285,6 +285,15 @@ public class UnitTests
         var hc2 = new PreparationHealthCheck(badSvc, db, NullLogger<PreparationHealthCheck>.Instance);
         var result2 = await hc2.CheckHealthAsync(new HealthCheckContext(), CancellationToken.None);
         Assert.Equal(HealthStatus.Unhealthy, result2.Status);
+    }
+
+    [Fact]
+    public async Task NpgsqlHealthCheck_ReturnsUnhealthy_WhenConnectionFails()
+    {
+        var hc = new NpgsqlHealthCheck("Host=127.0.0.1;Port=1;Username=u;Password=p;Database=d;Timeout=1;Command Timeout=1");
+        var result = await hc.CheckHealthAsync(new HealthCheckContext(), CancellationToken.None);
+        Assert.Equal(HealthStatus.Unhealthy, result.Status);
+        Assert.NotNull(result.Exception);
     }
 
     [Fact]
