@@ -32,9 +32,10 @@ docker run -d --name tennisbooking -p 5000:5000 \
   tennisbooking
 ```
 
-For Dokploy, set the build context/root directory to the repository root. The
-Dockerfile depends on `Directory.Packages.props` and the sibling projects under
-`src/`, so `src/TennisBooking` cannot be used as the Docker build context.
+For Dokploy, prefer the repository root as the build context and `Dockerfile` as
+the Dockerfile path. If the app is configured with `src/TennisBooking` as the
+build context, use `src/TennisBooking/Dockerfile`; it fetches the full repository
+inside the build stage because Docker cannot read files above the build context.
 
 The application will be available at `http://localhost:5000` (or port 80 when deployed).
 

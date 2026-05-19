@@ -1,16 +1,13 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
-COPY Directory.Packages.props ./
-COPY TennisBooking.slnx ./
-COPY src/TennisBooking.Domain/TennisBooking.Domain.csproj src/TennisBooking.Domain/
-COPY src/TennisBooking.Application/TennisBooking.Application.csproj src/TennisBooking.Application/
-COPY src/TennisBooking.Infrastructure/TennisBooking.Infrastructure.csproj src/TennisBooking.Infrastructure/
-COPY src/TennisBooking/TennisBooking.csproj src/TennisBooking/
-
+# This Dockerfile exists for hosts configured with src/TennisBooking as the
+# Docker build context. That context cannot see the solution root, so fetch the
+# full repository inside the build stage.
+ARG GIT_REPOSITORY=https://github.com/yaroslavshparuk/TennisBooking.git
+ARG GIT_REF=master
+RUN git clone --depth 1 --branch "$GIT_REF" "$GIT_REPOSITORY" .
 RUN dotnet restore TennisBooking.slnx --disable-parallel
-
-COPY . .
 RUN dotnet publish src/TennisBooking/TennisBooking.csproj -c Release -o /app/publish --no-restore
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
