@@ -24,13 +24,17 @@ Application for automated tennis court booking in Skedda with Telegram notificat
 
 ## Deployment
 
-Build and run the container image:
+Build and run the container image from the repository root:
 ```bash
-docker build -t tennisbooking src/TennisBooking
+docker build -t tennisbooking .
 docker run -d --name tennisbooking -p 5000:5000 \
   -e ConnectionStrings__Default=... \
   tennisbooking
 ```
+
+For Dokploy, set the build context/root directory to the repository root. The
+Dockerfile depends on `Directory.Packages.props` and the sibling projects under
+`src/`, so `src/TennisBooking` cannot be used as the Docker build context.
 
 The application will be available at `http://localhost:5000` (or port 80 when deployed).
 
