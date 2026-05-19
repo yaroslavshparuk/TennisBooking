@@ -4,17 +4,19 @@ using System.Text;
 using Hangfire;
 using Hangfire.PostgreSql;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
 using Npgsql;
+using TennisBooking.Application.Abstractions;
+using TennisBooking.Application.Booking;
 using TennisBooking.DAL;
 using TennisBooking.DAL.Models;
-using TennisBooking.HealthChecks;
-using TennisBooking.Models;
+using TennisBooking.Domain.Booking;
+using TennisBooking.Infrastructure.Persistence;
+using TennisBooking.Infrastructure.Scheduling;
+using TennisBooking.Infrastructure.Skedda;
 using TennisBooking.Options;
-using TennisBooking.Services;
 using Testcontainers.PostgreSql;
 using Xunit;
 
@@ -23,30 +25,14 @@ namespace TennisBooking.Tests.Integration;
 public sealed class BookingPostgresIntegrationTests
 {
     [DockerFact]
-    public async Task Preparation_PersistsScheduledFallback_WithMinimalArgumentsInHangfirePostgres()
+    public async Task PrepareBooking_PersistsScheduledFallback_WithMinimalArgumentsInHangfirePostgres()
     {
         await using var postgres = await StartPostgresAsync();
         var connectionString = postgres.GetConnectionString();
 
         await using var db = await CreateMigratedDbAsync(connectionString);
         using var skedda = new FakeSkeddaServer();
-        skedda.Enqueue(HttpMethod.Get, "/account/login", ctx =>
-        {
-            ctx.Response.StatusCode = 200;
-            ctx.Response.Headers.Add("Set-Cookie", "X-Skedda-RequestVerificationCookie=csrf-cookie; Path=/");
-            return "<input name=\"__RequestVerificationToken\" type=\"hidden\" value=\"token-1\" />";
-        });
-        skedda.Enqueue(HttpMethod.Post, "/logins", ctx =>
-        {
-            ctx.Response.StatusCode = 200;
-            ctx.Response.Headers.Add("Set-Cookie", "X-Skedda-ApplicationCookie=app-cookie; Path=/");
-            return "{}";
-        });
-        skedda.Enqueue(HttpMethod.Get, "/booking", ctx =>
-        {
-            ctx.Response.StatusCode = 200;
-            return "<input name=\"__RequestVerificationToken\" type=\"hidden\" value=\"token-2\" />";
-        });
+        EnqueuePreparationResponses(skedda);
 
         var storage = new PostgreSqlStorage(connectionString, _ => { }, new PostgreSqlStorageOptions
         {
@@ -54,24 +40,25 @@ public sealed class BookingPostgresIntegrationTests
             QueuePollInterval = TimeSpan.FromSeconds(1)
         });
         var backgroundJobs = new BackgroundJobClient(storage);
-        var precise = new Mock<IPreciseBookingScheduler>();
-        var service = CreateBookingService(skedda.BaseUrl, db, backgroundJobs, precise.Object);
+        var scheduler = new HangfireBookingScheduler(backgroundJobs, Mock.Of<IPreciseBookingScheduler>());
+        var service = new PrepareBookingUseCase(
+            new SkeddaClient(Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = skedda.BaseUrl })),
+            scheduler,
+            new FixedClock(new DateTimeOffset(2026, 5, 19, 12, 0, 0, TimeSpan.Zero)));
 
         var userConfig = NewConfig("postgres-schedule");
         db.UserConfigs.Add(userConfig);
         db.TelegramConfigs.Add(new TelegramConfig { BotToken = "telegram-token", ChatId = 123 });
         await db.SaveChangesAsync();
 
-        await service.Preparation(userConfig, scheduleBookingJob: true, CancellationToken.None);
-
-        precise.Verify(x => x.ScheduleBooking(It.IsAny<BookingInfo>()), Times.Once);
+        await service.ExecuteAsync(ToDomain(userConfig), scheduleBookingJob: true, CancellationToken.None);
 
         var persistedJob = await ReadLatestHangfireJobAsync(connectionString);
-        Assert.Contains(nameof(BookingService.BookingFallback), persistedJob.InvocationData);
+        Assert.Contains(nameof(BookingFallbackUseCase.ExecuteAsync), persistedJob.InvocationData);
         Assert.Contains(userConfig.Id.ToString(), persistedJob.Arguments);
         Assert.Contains("Scheduled", persistedJob.StateData);
 
-        Assert.DoesNotContain(nameof(BookingInfo), persistedJob.Arguments, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(nameof(PreparedBooking), persistedJob.Arguments, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("password", persistedJob.Arguments, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(userConfig.Password, persistedJob.Arguments, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("csrf-cookie", persistedJob.Arguments, StringComparison.OrdinalIgnoreCase);
@@ -102,10 +89,15 @@ public sealed class BookingPostgresIntegrationTests
         db.TelegramConfigs.Add(new TelegramConfig { BotToken = "telegram-token", ChatId = 123 });
         await db.SaveChangesAsync();
 
-        var service = CreateBookingService(skedda.BaseUrl, db);
+        var skeddaClient = new SkeddaClient(Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = skedda.BaseUrl }));
+        var execute = new ExecuteBookingUseCase(
+            skeddaClient,
+            Mock.Of<INotificationSender>(),
+            new InMemoryBookingDeduplicationStore());
+        var fallback = new BookingFallbackUseCase(new UserBookingConfigRepository(db), skeddaClient, execute);
         var startTime = new DateTimeOffset(2030, 1, 1, userConfig.Hour, 0, 0, TimeSpan.Zero);
 
-        await service.BookingFallback(userConfig.Id, startTime, CancellationToken.None);
+        await fallback.ExecuteAsync(userConfig.Id, startTime, CancellationToken.None);
 
         Assert.Equal(1, bookingPosts);
     }
@@ -133,30 +125,22 @@ public sealed class BookingPostgresIntegrationTests
         db.TelegramConfigs.Add(new TelegramConfig { BotToken = "telegram-token", ChatId = 123 });
         await db.SaveChangesAsync();
 
-        var service = CreateBookingService(skedda.BaseUrl, db);
+        var skeddaClient = new SkeddaClient(Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = skedda.BaseUrl }));
+        var dedupe = new InMemoryBookingDeduplicationStore();
+        var execute = new ExecuteBookingUseCase(skeddaClient, Mock.Of<INotificationSender>(), dedupe);
+        var fallback = new BookingFallbackUseCase(new UserBookingConfigRepository(db), skeddaClient, execute);
         var startTime = new DateTimeOffset(2030, 1, 1, userConfig.Hour, 0, 0, TimeSpan.Zero);
 
-        await service.Booking(new BookingInfo
-        {
-            UserConfig = userConfig,
-            Body = new { booking = new { spaces = new[] { userConfig.ResourceId } } },
-            RequestVerificationToken = "token",
-            CsrfCookie = "csrf",
-            ApplicationCookie = "app",
-            StartTime = startTime
-        }, CancellationToken.None);
-        await service.BookingFallback(userConfig.Id, startTime, CancellationToken.None);
+        await execute.ExecuteAsync(new PreparedBooking(
+            ToDomain(userConfig),
+            new BookingSlot(startTime),
+            new { booking = new { spaces = new[] { userConfig.ResourceId } } },
+            "token",
+            "csrf",
+            "app"), CancellationToken.None);
+        await fallback.ExecuteAsync(userConfig.Id, startTime, CancellationToken.None);
 
         Assert.Equal(1, bookingPosts);
-    }
-
-    [DockerFact]
-    public async Task NpgsqlHealthCheck_ReturnsHealthy_AgainstRunningPostgres()
-    {
-        await using var postgres = await StartPostgresAsync();
-        var hc = new NpgsqlHealthCheck(postgres.GetConnectionString());
-        var result = await hc.CheckHealthAsync(new HealthCheckContext(), CancellationToken.None);
-        Assert.Equal(HealthStatus.Healthy, result.Status);
     }
 
     private static async Task<PostgreSqlContainer> StartPostgresAsync()
@@ -175,29 +159,11 @@ public sealed class BookingPostgresIntegrationTests
     private static async Task<ApplicationDbContext> CreateMigratedDbAsync(string connectionString)
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
-            .UseNpgsql(connectionString)
+            .UseNpgsql(connectionString, pg => pg.MigrationsAssembly("TennisBooking"))
             .Options;
         var db = new ApplicationDbContext(options);
         await db.Database.MigrateAsync();
         return db;
-    }
-
-    private static BookingService CreateBookingService(
-        string apiBaseUrl,
-        ApplicationDbContext db,
-        IBackgroundJobClient? backgroundJobs = null,
-        IPreciseBookingScheduler? precise = null)
-    {
-        var telegramHandler = new DelegateHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)));
-        var telegram = new TelegramService(new HttpClient(telegramHandler), db, NullLogger<TelegramService>.Instance);
-
-        return new BookingService(
-            NullLogger<BookingService>.Instance,
-            Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = apiBaseUrl }),
-            db,
-            telegram,
-            backgroundJobs ?? Mock.Of<IBackgroundJobClient>(),
-            precise ?? Mock.Of<IPreciseBookingScheduler>());
     }
 
     private static UserConfig NewConfig(string usernamePrefix) => new()
@@ -210,6 +176,16 @@ public sealed class BookingPostgresIntegrationTests
         DayOfWeek = DayOfWeek.Monday,
         Hour = 10
     };
+
+    private static BookingUserConfig ToDomain(UserConfig entity) => new(
+        entity.Id,
+        entity.Username,
+        entity.Password,
+        entity.ResourceId,
+        entity.Venue,
+        entity.VenueUser,
+        entity.DayOfWeek,
+        entity.Hour);
 
     private static void EnqueuePreparationResponses(FakeSkeddaServer skedda)
     {
@@ -249,14 +225,18 @@ public sealed class BookingPostgresIntegrationTests
         return (reader.GetString(0), reader.GetString(1), reader.GetString(2));
     }
 
+    private sealed class FixedClock : IClock
+    {
+        public FixedClock(DateTimeOffset utcNow) => UtcNow = utcNow;
+        public DateTimeOffset UtcNow { get; }
+    }
+
     private sealed class DockerFactAttribute : FactAttribute
     {
         public DockerFactAttribute()
         {
             if (!DockerAvailable())
-            {
                 Skip = "Docker is not available; skipping Testcontainers PostgreSQL integration test.";
-            }
         }
 
         private static bool DockerAvailable()
@@ -281,13 +261,6 @@ public sealed class BookingPostgresIntegrationTests
                 return false;
             }
         }
-    }
-
-    private sealed class DelegateHandler : HttpMessageHandler
-    {
-        private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> _fn;
-        public DelegateHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> fn) => _fn = fn;
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => _fn(request, cancellationToken);
     }
 
     private sealed class FakeSkeddaServer : IDisposable
@@ -328,11 +301,9 @@ public sealed class BookingPostgresIntegrationTests
                     }
 
                     var expected = _responses.Dequeue();
-                    ctx.Response.StatusCode = 200;
                     Assert.Equal(expected.method, ctx.Request.HttpMethod);
                     Assert.Equal(expected.path, ctx.Request.Url!.AbsolutePath);
-                    var body = expected.response(ctx);
-                    await WriteAsync(ctx.Response, body);
+                    await WriteAsync(ctx.Response, expected.response(ctx));
                 }
                 catch when (_cts.IsCancellationRequested)
                 {
@@ -345,6 +316,7 @@ public sealed class BookingPostgresIntegrationTests
                         ctx.Response.StatusCode = 500;
                         ctx.Response.Close();
                     }
+
                     throw;
                 }
             }

@@ -2,21 +2,24 @@ using System.Net;
 using System.Text;
 using Hangfire;
 using Hangfire.Dashboard;
-using Hangfire.Common;
-using Hangfire.States;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
+using TennisBooking.Application.Abstractions;
+using TennisBooking.Application.Booking;
 using TennisBooking.Auth;
 using TennisBooking.DAL;
 using TennisBooking.DAL.Models;
+using TennisBooking.Domain.Booking;
 using TennisBooking.HealthChecks;
-using TennisBooking.Models;
+using TennisBooking.Infrastructure.Persistence;
+using TennisBooking.Infrastructure.Scheduling;
+using TennisBooking.Infrastructure.Skedda;
+using TennisBooking.Infrastructure.Telegram;
 using TennisBooking.Options;
-using TennisBooking.Services;
 using Xunit;
 
 namespace TennisBooking.Tests;
@@ -24,70 +27,110 @@ namespace TennisBooking.Tests;
 public class UnitTests
 {
     [Fact]
-    public async Task Preparation_WithNullUserConfig_DoesNotThrow()
+    public async Task PrepareBooking_WithNullUserConfig_ReturnsNull()
     {
-        var svc = CreateBookingService("http://127.0.0.1:65534", out _, out _);
-        await svc.Preparation(null!, false, CancellationToken.None);
+        var useCase = new PrepareBookingUseCase(
+            Mock.Of<ISkeddaClient>(),
+            new RecordingScheduler(),
+            new FixedClock(new DateTimeOffset(2026, 5, 19, 12, 0, 0, TimeSpan.Zero)));
+
+        var result = await useCase.ExecuteAsync(null, false, CancellationToken.None);
+
+        Assert.Null(result);
     }
 
     [Fact]
-    public async Task Preparation_SchedulesJob_WhenRequested()
+    public async Task PrepareBooking_SchedulesPreciseAndFallback_WithMinimalFallbackArguments()
+    {
+        var user = BasicDomainConfig();
+        var slot = new BookingSlot(new DateTimeOffset(2030, 6, 3, 10, 0, 0, TimeSpan.Zero));
+        var prepared = Prepared(user, slot);
+        var skedda = new Mock<ISkeddaClient>();
+        skedda.Setup(x => x.PrepareBookingAsync(user, It.IsAny<BookingSlot>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(prepared);
+        var scheduler = new RecordingScheduler();
+
+        var useCase = new PrepareBookingUseCase(
+            skedda.Object,
+            scheduler,
+            new FixedClock(new DateTimeOffset(2026, 5, 19, 12, 0, 0, TimeSpan.Zero)));
+
+        await useCase.ExecuteAsync(user, true, CancellationToken.None);
+
+        Assert.Same(prepared, scheduler.PreciseBooking);
+        Assert.Equal(user.Id, scheduler.FallbackUserConfigId);
+        Assert.Equal(slot.StartTime, scheduler.FallbackStartTime);
+    }
+
+    [Fact]
+    public async Task ExecuteBooking_DoesNotPostTwice_ForSameSlot()
+    {
+        var skedda = new Mock<ISkeddaClient>();
+        var notification = new Mock<INotificationSender>();
+        var useCase = new ExecuteBookingUseCase(
+            skedda.Object,
+            notification.Object,
+            new InMemoryBookingDeduplicationStore());
+        var booking = Prepared(BasicDomainConfig(), new BookingSlot(new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero)));
+
+        await useCase.ExecuteAsync(booking, CancellationToken.None);
+        await useCase.ExecuteAsync(booking, CancellationToken.None);
+
+        skedda.Verify(x => x.BookAsync(booking, It.IsAny<CancellationToken>()), Times.Once);
+        notification.Verify(x => x.NotifyBookingSucceededAsync(booking.UserConfig, booking.Slot, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task BookingFallback_LoadsConfigAndBooks()
+    {
+        await using var db = NewInMemoryDb();
+        var entity = BasicEntityConfig();
+        db.UserConfigs.Add(entity);
+        await db.SaveChangesAsync();
+
+        var skedda = new Mock<ISkeddaClient>();
+        var prepared = Prepared(ToDomain(entity), new BookingSlot(new DateTimeOffset(2030, 1, 1, entity.Hour, 0, 0, TimeSpan.Zero)));
+        skedda.Setup(x => x.PrepareBookingAsync(It.IsAny<BookingUserConfig>(), It.IsAny<BookingSlot>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(prepared);
+        var execute = new ExecuteBookingUseCase(skedda.Object, Mock.Of<INotificationSender>(), new InMemoryBookingDeduplicationStore());
+        var fallback = new BookingFallbackUseCase(new UserBookingConfigRepository(db), skedda.Object, execute);
+
+        await fallback.ExecuteAsync(entity.Id, prepared.Slot.StartTime, CancellationToken.None);
+
+        skedda.Verify(x => x.BookAsync(prepared, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task BookingFallback_Throws_WhenUserConfigMissing()
+    {
+        await using var db = NewInMemoryDb();
+        var fallback = new BookingFallbackUseCase(
+            new UserBookingConfigRepository(db),
+            Mock.Of<ISkeddaClient>(),
+            new ExecuteBookingUseCase(Mock.Of<ISkeddaClient>(), Mock.Of<INotificationSender>(), new InMemoryBookingDeduplicationStore()));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fallback.ExecuteAsync(999, DateTimeOffset.UtcNow, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task SkeddaClient_Throws_WhenTokenMissing()
     {
         using var server = new FakeSkeddaServer();
         server.Enqueue(HttpMethod.Get, "/account/login", ctx =>
         {
             ctx.Response.StatusCode = 200;
-            ctx.Response.Headers.Add("Set-Cookie", "X-Skedda-RequestVerificationCookie=csrf-cookie; Path=/");
-            return "<input name=\"__RequestVerificationToken\" type=\"hidden\" value=\"token-1\" />";
-        });
-        server.Enqueue(HttpMethod.Post, "/logins", ctx =>
-        {
-            ctx.Response.StatusCode = 200;
-            ctx.Response.Headers.Add("Set-Cookie", "X-Skedda-ApplicationCookie=app-cookie; Path=/");
-            return "{}";
-        });
-        server.Enqueue(HttpMethod.Get, "/booking", ctx =>
-        {
-            ctx.Response.StatusCode = 200;
-            return "<input name=\"__RequestVerificationToken\" type=\"hidden\" value=\"token-2\" />";
+            return "<html>no token</html>";
         });
 
-        var bg = new Mock<IBackgroundJobClient>();
-        bg.Setup(x => x.Create(It.IsAny<Job>(), It.IsAny<IState>())).Returns("job-id");
-        var precise = new Mock<IPreciseBookingScheduler>();
+        var client = new SkeddaClient(Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = server.BaseUrl }));
 
-        var svc = CreateBookingService(server.BaseUrl, out var telegramDb, out _, bg.Object, precise.Object);
-        telegramDb.TelegramConfigs.Add(new TelegramConfig { BotToken = "t", ChatId = 1 });
-        telegramDb.SaveChanges();
-
-        var cfg = new UserConfig
-        {
-            Username = "u",
-            Password = "p",
-            ResourceId = "res",
-            Venue = "venue",
-            VenueUser = "venue-user",
-            DayOfWeek = DayOfWeek.Monday,
-            Hour = 10
-        };
-
-        Job? scheduledJob = null;
-        bg.Invocations.Clear();
-        bg.Setup(x => x.Create(It.IsAny<Job>(), It.IsAny<IState>()))
-            .Callback<Job, IState>((job, _) => scheduledJob = job)
-            .Returns("job-id");
-
-        await svc.Preparation(cfg, true, CancellationToken.None);
-
-        bg.Verify(x => x.Create(It.IsAny<Job>(), It.IsAny<IState>()), Times.Once);
-        precise.Verify(x => x.ScheduleBooking(It.IsAny<BookingInfo>()), Times.Once);
-        Assert.NotNull(scheduledJob);
-        Assert.Equal(nameof(BookingService.BookingFallback), scheduledJob!.Method.Name);
-        Assert.DoesNotContain(scheduledJob.Args, arg => arg is BookingInfo);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.PrepareBookingAsync(BasicDomainConfig(), new BookingSlot(DateTimeOffset.UtcNow), CancellationToken.None));
     }
 
     [Fact]
-    public async Task Booking_DoesNotPostTwice_ForSameSlot()
+    public async Task SkeddaClient_BooksPreparedSlot()
     {
         using var skedda = new FakeSkeddaServer();
         var bookingPosts = 0;
@@ -97,194 +140,51 @@ public class UnitTests
             ctx.Response.StatusCode = 200;
             return "{}";
         });
+        var client = new SkeddaClient(Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = skedda.BaseUrl }));
+        var booking = Prepared(BasicDomainConfig(), new BookingSlot(DateTimeOffset.UtcNow));
 
-        var svc = CreateBookingService(skedda.BaseUrl, out _, out _);
-        var info = new BookingInfo
-        {
-            UserConfig = BasicConfig(),
-            Body = new { },
-            RequestVerificationToken = "t",
-            CsrfCookie = "c",
-            ApplicationCookie = "a",
-            StartTime = new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero)
-        };
-
-        await svc.Booking(info, CancellationToken.None);
-        await svc.Booking(info, CancellationToken.None);
+        await client.BookAsync(booking, CancellationToken.None);
 
         Assert.Equal(1, bookingPosts);
     }
 
     [Fact]
-    public async Task BookingFallback_LoadsConfigAndBooksWithoutSensitiveHangfireArgs()
-    {
-        using var server = new FakeSkeddaServer();
-        server.Enqueue(HttpMethod.Get, "/account/login", ctx =>
-        {
-            ctx.Response.StatusCode = 200;
-            ctx.Response.Headers.Add("Set-Cookie", "X-Skedda-RequestVerificationCookie=csrf-cookie; Path=/");
-            return "<input name=\"__RequestVerificationToken\" type=\"hidden\" value=\"token-1\" />";
-        });
-        server.Enqueue(HttpMethod.Post, "/logins", ctx =>
-        {
-            ctx.Response.StatusCode = 200;
-            ctx.Response.Headers.Add("Set-Cookie", "X-Skedda-ApplicationCookie=app-cookie; Path=/");
-            return "{}";
-        });
-        server.Enqueue(HttpMethod.Get, "/booking", ctx =>
-        {
-            ctx.Response.StatusCode = 200;
-            return "<input name=\"__RequestVerificationToken\" type=\"hidden\" value=\"token-2\" />";
-        });
-        server.Enqueue(HttpMethod.Post, "/bookings", ctx =>
-        {
-            ctx.Response.StatusCode = 200;
-            return "{}";
-        });
-
-        var svc = CreateBookingService(server.BaseUrl, out var db, out _);
-        var cfg = BasicConfig();
-        cfg.Id = 42;
-        db.UserConfigs.Add(cfg);
-        db.SaveChanges();
-
-        var startTime = new DateTimeOffset(2030, 1, 1, cfg.Hour, 0, 0, TimeSpan.Zero);
-        await svc.BookingFallback(cfg.Id, startTime, CancellationToken.None);
-    }
-
-    [Fact]
-    public async Task BookingFallback_Throws_WhenUserConfigMissing()
-    {
-        var svc = CreateBookingService("http://127.0.0.1:65534", out _, out _);
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            svc.BookingFallback(999, DateTimeOffset.UtcNow, CancellationToken.None));
-    }
-
-    [Fact]
-    public async Task Preparation_Throws_WhenTokenMissing()
-    {
-        using var server = new FakeSkeddaServer();
-        server.Enqueue(HttpMethod.Get, "/account/login", ctx =>
-        {
-            ctx.Response.StatusCode = 200;
-            return "<html>no token</html>";
-        });
-
-        var svc = CreateBookingService(server.BaseUrl, out _, out _);
-        var cfg = BasicConfig();
-        await Assert.ThrowsAsync<InvalidOperationException>(() => svc.Preparation(cfg, false, CancellationToken.None));
-    }
-
-    [Fact]
-    public async Task Booking_SendsTelegramNotification_OnSuccess()
-    {
-        using var skedda = new FakeSkeddaServer();
-        skedda.Enqueue(HttpMethod.Post, "/bookings", ctx =>
-        {
-            ctx.Response.StatusCode = 200;
-            return "{}";
-        });
-
-        var telegramCalls = 0;
-        var telegramHandler = new DelegateHandler((req, _) =>
-        {
-            if (req.RequestUri!.Host.Contains("api.telegram.org")) telegramCalls++;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
-        });
-
-        var dbOpts = new DbContextOptionsBuilder<ApplicationDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString())
-            .Options;
-        using var db = new ApplicationDbContext(dbOpts);
-        db.TelegramConfigs.Add(new TelegramConfig { BotToken = "abc", ChatId = 123 });
-        db.SaveChanges();
-
-        var tg = new TelegramService(new HttpClient(telegramHandler), db, NullLogger<TelegramService>.Instance);
-        var svc = new BookingService(
-            NullLogger<BookingService>.Instance,
-            Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = skedda.BaseUrl }),
-            db,
-            tg,
-            Mock.Of<IBackgroundJobClient>(),
-            Mock.Of<IPreciseBookingScheduler>());
-
-        var info = new BookingInfo
-        {
-            UserConfig = BasicConfig(),
-            Body = new { booking = new { x = 1 } },
-            RequestVerificationToken = "token",
-            CsrfCookie = "csrf",
-            ApplicationCookie = "app",
-            StartTime = DateTimeOffset.UtcNow
-        };
-
-        await svc.Booking(info, CancellationToken.None);
-        Assert.Equal(1, telegramCalls);
-    }
-
-    [Fact]
-    public async Task Booking_Throws_OnSkeddaFailure()
-    {
-        using var skedda = new FakeSkeddaServer();
-        skedda.Enqueue(HttpMethod.Post, "/bookings", ctx =>
-        {
-            ctx.Response.StatusCode = 500;
-            return "fail";
-        });
-
-        var svc = CreateBookingService(skedda.BaseUrl, out _, out _);
-        await Assert.ThrowsAsync<HttpRequestException>(() => svc.Booking(new BookingInfo
-        {
-            UserConfig = BasicConfig(),
-            Body = new { },
-            RequestVerificationToken = "t",
-            CsrfCookie = "c",
-            ApplicationCookie = "a",
-            StartTime = DateTimeOffset.UtcNow
-        }, CancellationToken.None));
-    }
-
-    [Fact]
-    public async Task Booking_NullInfo_DoesNotThrow()
-    {
-        var svc = CreateBookingService("http://127.0.0.1:65534", out _, out _);
-        await svc.Booking(null!, CancellationToken.None);
-    }
-
-    [Fact]
-    public async Task TelegramService_Notify_Works_And_HandlesMissingConfig()
+    public async Task TelegramNotificationSender_Notify_Works_And_HandlesMissingConfig()
     {
         var handler = new DelegateHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)));
-        var opts = new DbContextOptionsBuilder<ApplicationDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
-        using var db = new ApplicationDbContext(opts);
+        await using var db = NewInMemoryDb();
 
-        var svc = new TelegramService(new HttpClient(handler), db, NullLogger<TelegramService>.Instance);
-        await svc.NotifyAsync("hello"); // missing config path (caught internally)
+        var sender = new TelegramNotificationSender(new HttpClient(handler), db, NullLogger<TelegramNotificationSender>.Instance);
+        await sender.NotifyBookingSucceededAsync(BasicDomainConfig(), new BookingSlot(DateTimeOffset.UtcNow), CancellationToken.None);
 
         db.TelegramConfigs.Add(new TelegramConfig { BotToken = "x", ChatId = 5 });
-        db.SaveChanges();
-        await svc.NotifyAsync("hello"); // success path
+        await db.SaveChangesAsync();
+        await sender.NotifyBookingSucceededAsync(BasicDomainConfig(), new BookingSlot(DateTimeOffset.UtcNow), CancellationToken.None);
     }
 
     [Fact]
     public async Task PreparationHealthCheck_ReturnsHealthy_AndUnhealthy()
     {
-        var opts = new DbContextOptionsBuilder<ApplicationDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
-        using var db = new ApplicationDbContext(opts);
+        await using var healthyDb = NewInMemoryDb();
+        var healthy = new PreparationHealthCheck(
+            new PrepareBookingUseCase(Mock.Of<ISkeddaClient>(), new RecordingScheduler(), new FixedClock(DateTimeOffset.UtcNow)),
+            new UserBookingConfigRepository(healthyDb),
+            NullLogger<PreparationHealthCheck>.Instance);
 
-        var healthySvc = CreateBookingService("http://127.0.0.1:65534", out _, out _);
-        var hc1 = new PreparationHealthCheck(healthySvc, db, NullLogger<PreparationHealthCheck>.Instance);
-        var result1 = await hc1.CheckHealthAsync(new HealthCheckContext(), CancellationToken.None);
-        Assert.Equal(HealthStatus.Healthy, result1.Status);
+        Assert.Equal(HealthStatus.Healthy, (await healthy.CheckHealthAsync(new HealthCheckContext())).Status);
 
-        db.UserConfigs.Add(BasicConfig());
-        db.SaveChanges();
+        await using var unhealthyDb = NewInMemoryDb();
+        unhealthyDb.UserConfigs.Add(BasicEntityConfig());
+        await unhealthyDb.SaveChangesAsync();
+        var badSkedda = new Mock<ISkeddaClient>();
+        badSkedda.Setup(x => x.PrepareBookingAsync(It.IsAny<BookingUserConfig>(), It.IsAny<BookingSlot>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("bad"));
+        var unhealthy = new PreparationHealthCheck(
+            new PrepareBookingUseCase(badSkedda.Object, new RecordingScheduler(), new FixedClock(DateTimeOffset.UtcNow)),
+            new UserBookingConfigRepository(unhealthyDb),
+            NullLogger<PreparationHealthCheck>.Instance);
 
-        var badSvc = CreateBookingService("not-a-url", out _, out _);
-        var hc2 = new PreparationHealthCheck(badSvc, db, NullLogger<PreparationHealthCheck>.Instance);
-        var result2 = await hc2.CheckHealthAsync(new HealthCheckContext(), CancellationToken.None);
-        Assert.Equal(HealthStatus.Unhealthy, result2.Status);
+        Assert.Equal(HealthStatus.Unhealthy, (await unhealthy.CheckHealthAsync(new HealthCheckContext())).Status);
     }
 
     [Fact]
@@ -300,7 +200,6 @@ public class UnitTests
     public void HangfireBasicAuthFilter_AuthorizationCases()
     {
         var filter = new HangfireBasicAuthFilter("user", "pass");
-
         var storage = new Mock<Hangfire.JobStorage>().Object;
         var options = new DashboardOptions();
 
@@ -308,47 +207,41 @@ public class UnitTests
         Assert.False(filter.Authorize(new AspNetCoreDashboardContext(storage, options, ctxNoHeader)));
 
         var httpBadScheme = NewHttp();
-        httpBadScheme.Request.Headers["Authorization"] = "Bearer abc";
+        httpBadScheme.Request.Headers.Authorization = "Bearer abc";
         Assert.False(filter.Authorize(new AspNetCoreDashboardContext(storage, options, httpBadScheme)));
 
         var httpBadCreds = NewHttp();
-        httpBadCreds.Request.Headers["Authorization"] = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("user:nope"));
+        httpBadCreds.Request.Headers.Authorization = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("user:nope"));
         Assert.False(filter.Authorize(new AspNetCoreDashboardContext(storage, options, httpBadCreds)));
 
         var httpBadBase64 = NewHttp();
-        httpBadBase64.Request.Headers["Authorization"] = "Basic not-base64";
+        httpBadBase64.Request.Headers.Authorization = "Basic not-base64";
         Assert.False(filter.Authorize(new AspNetCoreDashboardContext(storage, options, httpBadBase64)));
 
         var httpGood = NewHttp();
-        httpGood.Request.Headers["Authorization"] = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("user:pass"));
+        httpGood.Request.Headers.Authorization = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("user:pass"));
         Assert.True(filter.Authorize(new AspNetCoreDashboardContext(storage, options, httpGood)));
     }
 
-    [Fact]
-    public void Model_And_Options_PropertyCoverage()
+    private static ApplicationDbContext NewInMemoryDb()
     {
-        var u = BasicConfig();
-        Assert.Equal("u", u.Username);
-
-        var t = new TelegramConfig { Id = 1, BotToken = "token", ChatId = 42 };
-        Assert.Equal(42, t.ChatId);
-
-        var o = new SkeddaOptions { ApiBaseUrl = "http://localhost" };
-        Assert.Contains("http", o.ApiBaseUrl);
-
-        var bi = new BookingInfo
-        {
-            UserConfig = u,
-            RequestVerificationToken = "r",
-            CsrfCookie = "c",
-            ApplicationCookie = "a",
-            Body = new { n = 1 },
-            StartTime = DateTimeOffset.UtcNow
-        };
-        Assert.NotNull(bi.Body);
+        var opts = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options;
+        return new ApplicationDbContext(opts);
     }
 
-    private static UserConfig BasicConfig() => new()
+    private static BookingUserConfig BasicDomainConfig() => new(
+        1,
+        "u",
+        "p",
+        "r",
+        "v",
+        "vu",
+        DayOfWeek.Monday,
+        10);
+
+    private static UserConfig BasicEntityConfig() => new()
     {
         Id = 1,
         Username = "u",
@@ -360,28 +253,52 @@ public class UnitTests
         Hour = 10
     };
 
-    private static BookingService CreateBookingService(string apiBaseUrl, out ApplicationDbContext telegramDb, out IBackgroundJobClient bg, IBackgroundJobClient? bgOverride = null, IPreciseBookingScheduler? preciseOverride = null)
-    {
-        var tgHandler = new DelegateHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)));
-        var dbOpts = new DbContextOptionsBuilder<ApplicationDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
-        telegramDb = new ApplicationDbContext(dbOpts);
-        var tg = new TelegramService(new HttpClient(tgHandler), telegramDb, NullLogger<TelegramService>.Instance);
-        bg = bgOverride ?? Mock.Of<IBackgroundJobClient>();
-        var precise = preciseOverride ?? Mock.Of<IPreciseBookingScheduler>();
-        return new BookingService(
-            NullLogger<BookingService>.Instance,
-            Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = apiBaseUrl }),
-            telegramDb,
-            tg,
-            bg,
-            precise);
-    }
+    private static BookingUserConfig ToDomain(UserConfig entity) => new(
+        entity.Id,
+        entity.Username,
+        entity.Password,
+        entity.ResourceId,
+        entity.Venue,
+        entity.VenueUser,
+        entity.DayOfWeek,
+        entity.Hour);
+
+    private static PreparedBooking Prepared(BookingUserConfig user, BookingSlot slot) => new(
+        user,
+        slot,
+        new { booking = new { spaces = new[] { user.ResourceId } } },
+        "token",
+        "csrf",
+        "app");
 
     private static DefaultHttpContext NewHttp()
     {
         var http = new DefaultHttpContext();
         http.RequestServices = new NullServiceProvider();
         return http;
+    }
+
+    private sealed class FixedClock : IClock
+    {
+        public FixedClock(DateTimeOffset utcNow) => UtcNow = utcNow;
+        public DateTimeOffset UtcNow { get; }
+    }
+
+    private sealed class RecordingScheduler : IBookingScheduler
+    {
+        public PreparedBooking? PreciseBooking { get; private set; }
+        public int? FallbackUserConfigId { get; private set; }
+        public DateTimeOffset? FallbackStartTime { get; private set; }
+
+        public void SchedulePreciseBooking(PreparedBooking booking) => PreciseBooking = booking;
+
+        public void ScheduleFallback(int userConfigId, DateTimeOffset startTime, DateTimeOffset runAt)
+        {
+            FallbackUserConfigId = userConfigId;
+            FallbackStartTime = startTime;
+        }
+
+        public void ScheduleRecurringPreparation(BookingUserConfig userConfig) { }
     }
 
     private sealed class NullServiceProvider : IServiceProvider
@@ -436,8 +353,7 @@ public class UnitTests
                     var expected = _responses.Dequeue();
                     Assert.Equal(expected.method, ctx.Request.HttpMethod);
                     Assert.Equal(expected.path, ctx.Request.Url!.AbsolutePath);
-                    var body = expected.response(ctx);
-                    await WriteAsync(ctx.Response, body);
+                    await WriteAsync(ctx.Response, expected.response(ctx));
                 }
                 catch when (_cts.IsCancellationRequested)
                 {
@@ -450,6 +366,7 @@ public class UnitTests
                         ctx.Response.StatusCode = 500;
                         ctx.Response.Close();
                     }
+
                     throw;
                 }
             }

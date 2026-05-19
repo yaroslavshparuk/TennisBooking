@@ -1,4 +1,4 @@
-﻿namespace TennisBooking.DAL;
+namespace TennisBooking.DAL;
 
 using Microsoft.EntityFrameworkCore;
 using Models;

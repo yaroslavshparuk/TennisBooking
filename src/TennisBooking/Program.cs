@@ -7,26 +7,26 @@ using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using TennisBooking.Auth;
+using TennisBooking.Application.Abstractions;
+using TennisBooking.Application.Booking;
 using TennisBooking.DAL;
 using TennisBooking.HealthChecks;
-using TennisBooking.Models;
+using TennisBooking.Infrastructure.Persistence;
+using TennisBooking.Infrastructure.Scheduling;
+using TennisBooking.Infrastructure.Skedda;
+using TennisBooking.Infrastructure.Telegram;
 using TennisBooking.Options;
-using TennisBooking.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddEnvironmentVariables();
 var skeddaConfig = builder.Configuration.GetSection("SkeddaConfig");
 builder.Services.Configure<SkeddaOptions>(skeddaConfig);
-builder.Services.AddHttpClient<BookingService>(client => {
-    var opts = skeddaConfig.Get<SkeddaOptions>();
-    client.BaseAddress = new Uri(opts.ApiBaseUrl);
-});
-builder.Services.AddHttpClient<TelegramService>();
+builder.Services.AddHttpClient<TelegramNotificationSender>();
 
 var connString = builder.Configuration.GetConnectionString("Default")
                  ?? throw new InvalidOperationException("Connection string 'Default' not found.");
 builder.Services.AddDbContext<ApplicationDbContext>(opt =>
-    opt.UseNpgsql(connString));
+    opt.UseNpgsql(connString, pg => pg.MigrationsAssembly(typeof(Program).Assembly.GetName().Name)));
 
 builder.Services.AddHangfire(config => config
     .UseSimpleAssemblyNameTypeSerializer()
@@ -47,8 +47,17 @@ builder.Services.AddHangfireServer(options =>
 builder.Services.AddSingleton<PreciseBookingScheduler>();
 builder.Services.AddSingleton<IPreciseBookingScheduler>(sp => sp.GetRequiredService<PreciseBookingScheduler>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<PreciseBookingScheduler>());
-builder.Services.AddScoped<BookingService>();
-builder.Services.AddScoped<TelegramService>();
+builder.Services.AddSingleton<IClock, SystemClock>();
+builder.Services.AddSingleton<IBookingDeduplicationStore, InMemoryBookingDeduplicationStore>();
+builder.Services.AddScoped<IUserBookingConfigRepository, UserBookingConfigRepository>();
+builder.Services.AddScoped<ISkeddaClient, SkeddaClient>();
+builder.Services.AddScoped<INotificationSender, TelegramNotificationSender>();
+builder.Services.AddScoped<IBookingScheduler, HangfireBookingScheduler>();
+builder.Services.AddScoped<PrepareBookingUseCase>();
+builder.Services.AddScoped<PrepareBookingForConfigUseCase>();
+builder.Services.AddScoped<ExecuteBookingUseCase>();
+builder.Services.AddScoped<BookingFallbackUseCase>();
+builder.Services.AddScoped<ScheduleBookingsUseCase>();
 builder.Services.AddControllers();
 builder.Services.AddHealthChecks()
     .AddCheck(
@@ -123,16 +132,8 @@ app.UseEndpoints(endpoints => {
     endpoints.MapHealthChecks("/health");
 });
 using (var scope = app.Services.CreateScope()) {
-    var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-    var configs = db.UserConfigs.AsNoTracking().ToList();
-    foreach (var cfg in configs) {
-        RecurringJob.AddOrUpdate<BookingService>(
-            cfg.Username,
-            x => x.Preparation(cfg, true, CancellationToken.None),
-            Cron.Weekly(cfg.DayOfWeek, cfg.Hour - 1, 59),
-            TimeZoneInfo.FindSystemTimeZoneById("Europe/Kyiv")
-        );
-    }
+    var scheduler = scope.ServiceProvider.GetRequiredService<ScheduleBookingsUseCase>();
+    await scheduler.ExecuteAsync(CancellationToken.None);
 }
 
 app.Run();
