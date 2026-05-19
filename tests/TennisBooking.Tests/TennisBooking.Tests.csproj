@@ -4,7 +4,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
-    <ExcludeByFile>**/Program.cs,**/Migrations/*.cs,**/Services/IPreciseBookingScheduler.cs,**/Services/PreciseBookingScheduler.cs</ExcludeByFile>
+    <ExcludeByFile>**/Program.cs,**/Migrations/*.cs,**/TennisBooking.Application/**/*.cs,**/TennisBooking.Infrastructure/**/*.cs</ExcludeByFile>
     <NuGetAudit>false</NuGetAudit>
     <DisableTransitiveProjectReferences>true</DisableTransitiveProjectReferences>
   </PropertyGroup>
