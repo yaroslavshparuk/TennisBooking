@@ -28,6 +28,7 @@ public class NpgsqlHealthCheck : IHealthCheck
         {
             return HealthCheckResult.Unhealthy(ex.Message, ex);
         }
+
         return HealthCheckResult.Healthy();
     }
 }
