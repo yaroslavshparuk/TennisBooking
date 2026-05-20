@@ -1,5 +1,6 @@
 using Hangfire;
 using Hangfire.PostgreSql;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using OpenTelemetry.Logs;
@@ -129,7 +130,11 @@ app.UseHangfireDashboard("/hangfire", new DashboardOptions
 app.UseEndpoints(endpoints => {
     endpoints.MapControllers();
     endpoints.MapHangfireDashboard();
-    endpoints.MapHealthChecks("/health");
+    endpoints.MapHealthChecks("/health", new HealthCheckOptions
+    {
+        Predicate = _ => false
+    });
+    endpoints.MapHealthChecks("/health/ready");
 });
 using (var scope = app.Services.CreateScope()) {
     var scheduler = scope.ServiceProvider.GetRequiredService<ScheduleBookingsUseCase>();
