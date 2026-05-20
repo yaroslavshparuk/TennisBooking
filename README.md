@@ -37,6 +37,8 @@ Dockerfile depends on `Directory.Packages.props` and the sibling projects under
 `src/`, so `src/TennisBooking` cannot be used as the Docker build context.
 
 The application will be available at `http://localhost:5000` (or port 80 when deployed).
+Use `/health` for container liveness checks. Use `/health/ready` for the deeper
+readiness check that verifies PostgreSQL and booking preparation.
 
 ## Configuration
 
