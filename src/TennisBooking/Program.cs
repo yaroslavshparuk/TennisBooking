@@ -64,11 +64,11 @@ builder.Services.AddHealthChecks()
         "postgres",
         new NpgsqlHealthCheck(connString),
         failureStatus: HealthStatus.Degraded,
-        tags: new[] { "db", "sql", "postgres" }
+        tags: new[] { "db", "sql", "postgres", "ready" }
     ).AddCheck<PreparationHealthCheck>(
          "preparation",
          failureStatus: HealthStatus.Unhealthy,
-         tags: new[] { "service", "custom" });;
+         tags: new[] { "service", "custom", "ready" });;
 
 var resourceBuilder = ResourceBuilder.CreateDefault()
     .AddService(serviceName: builder.Configuration["OpenTelemetry:ServiceName"], serviceVersion: "1.0.0")
@@ -130,6 +130,14 @@ app.UseEndpoints(endpoints => {
     endpoints.MapControllers();
     endpoints.MapHangfireDashboard();
     endpoints.MapHealthChecks("/health");
+    endpoints.MapHealthChecks("/health/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+    {
+        Predicate = check => check.Tags.Contains("ready")
+    });
+    endpoints.MapHealthChecks("/health/live", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+    {
+        Predicate = _ => false
+    });
 });
 using (var scope = app.Services.CreateScope()) {
     var scheduler = scope.ServiceProvider.GetRequiredService<ScheduleBookingsUseCase>();
