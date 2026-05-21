@@ -48,7 +48,6 @@ public sealed class BookingPostgresIntegrationTests
 
         var userConfig = NewConfig("postgres-schedule");
         db.UserConfigs.Add(userConfig);
-        db.TelegramConfigs.Add(new TelegramConfig { BotToken = "telegram-token", ChatId = 123 });
         await db.SaveChangesAsync();
 
         await service.ExecuteAsync(ToDomain(userConfig), scheduleBookingJob: true, CancellationToken.None);
@@ -86,7 +85,6 @@ public sealed class BookingPostgresIntegrationTests
 
         var userConfig = NewConfig("postgres-fallback");
         db.UserConfigs.Add(userConfig);
-        db.TelegramConfigs.Add(new TelegramConfig { BotToken = "telegram-token", ChatId = 123 });
         await db.SaveChangesAsync();
 
         var skeddaClient = new SkeddaClient(Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = skedda.BaseUrl }));
@@ -122,7 +120,6 @@ public sealed class BookingPostgresIntegrationTests
 
         var userConfig = NewConfig("postgres-dedupe");
         db.UserConfigs.Add(userConfig);
-        db.TelegramConfigs.Add(new TelegramConfig { BotToken = "telegram-token", ChatId = 123 });
         await db.SaveChangesAsync();
 
         var skeddaClient = new SkeddaClient(Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = skedda.BaseUrl }));

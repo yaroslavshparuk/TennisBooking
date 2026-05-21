@@ -1,8 +1,7 @@
-namespace TennisBooking.DAL.Models;
+namespace TennisBooking.Options;
 
-public class TelegramConfig
+public class TelegramOptions
 {
-    public int Id { get; set; }
     public string BotToken { get; set; } = string.Empty;
     public long ChatId { get; set; }
 }

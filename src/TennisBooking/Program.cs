@@ -1,5 +1,7 @@
 using Hangfire;
+using Hangfire.Common;
 using Hangfire.PostgreSql;
+using Hangfire.Storage;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -21,7 +23,9 @@ using TennisBooking.Options;
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddEnvironmentVariables();
 var skeddaConfig = builder.Configuration.GetSection("SkeddaConfig");
+var telegramConfig = builder.Configuration.GetSection("Telegram");
 builder.Services.Configure<SkeddaOptions>(skeddaConfig);
+builder.Services.Configure<TelegramOptions>(telegramConfig);
 builder.Services.AddHttpClient<TelegramNotificationSender>();
 
 var connString = builder.Configuration.GetConnectionString("Default")
@@ -119,6 +123,8 @@ builder.Logging.AddOpenTelemetry(logging =>
 
 var app = builder.Build();
 
+CleanupInvalidRecurringJobs();
+
 app.UseRouting();
 app.UseHangfireDashboard("/hangfire", new DashboardOptions
 {
@@ -142,3 +148,30 @@ using (var scope = app.Services.CreateScope()) {
 }
 
 app.Run();
+
+static void CleanupInvalidRecurringJobs()
+{
+    using var connection = JobStorage.Current.GetConnection();
+    var recurringJobIds = connection.GetAllItemsFromSet("recurring-jobs");
+
+    foreach (var recurringJobId in recurringJobIds)
+    {
+        var recurringJob = connection.GetAllEntriesFromHash($"recurring-job:{recurringJobId}");
+        if (recurringJob is null ||
+            !recurringJob.TryGetValue("Job", out var invocationDataPayload) ||
+            string.IsNullOrWhiteSpace(invocationDataPayload))
+        {
+            continue;
+        }
+
+        try
+        {
+            var invocationData = InvocationData.DeserializePayload(invocationDataPayload);
+            _ = invocationData.DeserializeJob();
+        }
+        catch (JobLoadException)
+        {
+            RecurringJob.RemoveIfExists(recurringJobId);
+        }
+    }
+}
