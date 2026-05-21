@@ -36,9 +36,7 @@
 
     <ItemGroup>
       <ProjectReference Include="../TennisBooking.Infrastructure/TennisBooking.Infrastructure.csproj" />
-      <Reference Include="TennisBooking.Application">
-        <HintPath>../TennisBooking.Application/bin/$(Configuration)/net10.0/TennisBooking.Application.dll</HintPath>
-      </Reference>
+      <ProjectReference Include="../TennisBooking.Application/TennisBooking.Application.csproj" />
     </ItemGroup>
 
 </Project>
