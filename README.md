@@ -46,3 +46,11 @@ Configure the following environment variables:
 - `ConnectionStrings__Default` - PostgreSQL connection string
 - `Hangfire__DashboardUser` - Hangfire dashboard username
 - `Hangfire__DashboardPass` - Hangfire dashboard password
+- `Telegram__BotToken` - Telegram bot token
+- `Telegram__ChatId` - Telegram chat id
+
+For local development, you can use user secrets:
+```bash
+dotnet user-secrets --project src/TennisBooking set "Telegram:BotToken" "<token>"
+dotnet user-secrets --project src/TennisBooking set "Telegram:ChatId" "<chat-id>"
+```

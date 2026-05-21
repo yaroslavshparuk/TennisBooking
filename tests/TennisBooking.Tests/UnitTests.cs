@@ -152,13 +152,11 @@ public class UnitTests
     public async Task TelegramNotificationSender_Notify_Works_And_HandlesMissingConfig()
     {
         var handler = new DelegateHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)));
-        await using var db = NewInMemoryDb();
 
-        var sender = new TelegramNotificationSender(new HttpClient(handler), db, NullLogger<TelegramNotificationSender>.Instance);
-        await sender.NotifyBookingSucceededAsync(BasicDomainConfig(), new BookingSlot(DateTimeOffset.UtcNow), CancellationToken.None);
-
-        db.TelegramConfigs.Add(new TelegramConfig { BotToken = "x", ChatId = 5 });
-        await db.SaveChangesAsync();
+        var sender = new TelegramNotificationSender(
+            new HttpClient(handler),
+            Microsoft.Extensions.Options.Options.Create(new TelegramOptions { BotToken = "x", ChatId = 5 }),
+            NullLogger<TelegramNotificationSender>.Instance);
         await sender.NotifyBookingSucceededAsync(BasicDomainConfig(), new BookingSlot(DateTimeOffset.UtcNow), CancellationToken.None);
     }
 

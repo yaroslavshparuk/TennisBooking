@@ -21,7 +21,9 @@ using TennisBooking.Options;
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddEnvironmentVariables();
 var skeddaConfig = builder.Configuration.GetSection("SkeddaConfig");
+var telegramConfig = builder.Configuration.GetSection("Telegram");
 builder.Services.Configure<SkeddaOptions>(skeddaConfig);
+builder.Services.Configure<TelegramOptions>(telegramConfig);
 builder.Services.AddHttpClient<TelegramNotificationSender>();
 
 var connString = builder.Configuration.GetConnectionString("Default")
