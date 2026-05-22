@@ -7,7 +7,6 @@ using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
-using Pyroscope;
 using Npgsql;
 using TennisBooking.Auth;
 using TennisBooking.Application.Abstractions;
@@ -22,29 +21,6 @@ using TennisBooking.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddEnvironmentVariables();
-
-var pyroscopeEnabled = builder.Configuration.GetValue<bool>("Pyroscope:Enabled");
-if (pyroscopeEnabled)
-{
-    var serverAddress = builder.Configuration["Pyroscope:ServerAddress"];
-    if (string.IsNullOrWhiteSpace(serverAddress))
-    {
-        throw new InvalidOperationException("Pyroscope is enabled but 'Pyroscope:ServerAddress' is missing.");
-    }
-
-    Environment.SetEnvironmentVariable("PYROSCOPE_SERVER_ADDRESS", serverAddress);
-    Environment.SetEnvironmentVariable(
-        "PYROSCOPE_APPLICATION_NAME",
-        builder.Configuration["Pyroscope:ApplicationName"] ?? "TennisBooking");
-    Environment.SetEnvironmentVariable("PYROSCOPE_PROFILING_ENABLED", "1");
-
-    var pyroscopeProfiler = Pyroscope.Profiler.Instance;
-    pyroscopeProfiler.SetCPUTrackingEnabled(true);
-    pyroscopeProfiler.SetAllocationTrackingEnabled(true);
-    pyroscopeProfiler.SetContentionTrackingEnabled(true);
-    pyroscopeProfiler.SetExceptionTrackingEnabled(true);
-}
-
 var skeddaConfig = builder.Configuration.GetSection("SkeddaConfig");
 var telegramConfig = builder.Configuration.GetSection("Telegram");
 builder.Services.Configure<SkeddaOptions>(skeddaConfig);

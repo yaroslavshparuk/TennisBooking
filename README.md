@@ -48,13 +48,6 @@ Configure the following environment variables:
 - `Hangfire__DashboardPass` - Hangfire dashboard password
 - `Telegram__BotToken` - Telegram bot token
 - `Telegram__ChatId` - Telegram chat id
-- `Pyroscope__Enabled` - enable/disable profiling (`true`/`false`)
-- `Pyroscope__ServerAddress` - Pyroscope server URL (required when enabled)
-- `Pyroscope__ApplicationName` - profiler application label (optional, defaults to `TennisBooking`)
-
-The Docker image now includes Pyroscope native profiler binaries and sets:
-`CORECLR_ENABLE_PROFILING`, `CORECLR_PROFILER`, `CORECLR_PROFILER_PATH`,
-`LD_PRELOAD`, and `LD_LIBRARY_PATH` automatically.
 
 For local development, you can use user secrets:
 ```bash
