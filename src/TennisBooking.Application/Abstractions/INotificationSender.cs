@@ -10,4 +10,5 @@ public interface INotificationSender
         CancellationToken cancellationToken);
 
     Task NotifyMessageAsync(string message, CancellationToken cancellationToken, int? replyToMessageId = null);
+    Task<int> GetThumbsUpReactionCountAsync(long chatId, int messageId, CancellationToken cancellationToken);
 }

@@ -77,6 +77,7 @@ public class UnitTests
             notification.Object,
             new InMemoryBookingDeduplicationStore(),
             Mock.Of<IBookingCancellationLinkRepository>(),
+            Mock.Of<IBookingScheduler>(),
             NullLogger<ExecuteBookingUseCase>.Instance);
         var booking = Prepared(BasicDomainConfig(), new BookingSlot(new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero)));
 
@@ -109,6 +110,7 @@ public class UnitTests
             notification.Object,
             new InMemoryBookingDeduplicationStore(),
             Mock.Of<IBookingCancellationLinkRepository>(),
+            Mock.Of<IBookingScheduler>(),
             NullLogger<ExecuteBookingUseCase>.Instance);
         var fallback = new BookingFallbackUseCase(new UserBookingConfigRepository(db), skedda.Object, execute);
 
@@ -129,10 +131,68 @@ public class UnitTests
                 Mock.Of<INotificationSender>(),
                 new InMemoryBookingDeduplicationStore(),
                 Mock.Of<IBookingCancellationLinkRepository>(),
+                Mock.Of<IBookingScheduler>(),
                 NullLogger<ExecuteBookingUseCase>.Instance));
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             fallback.ExecuteAsync(999, DateTimeOffset.UtcNow, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task AttendanceReminder_SendsMessage_WhenThumbsUpCountIsLow()
+    {
+        var link = new BookingCancellationLink(
+            BasicDomainConfig(),
+            new BookingSlot(new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero)),
+            5,
+            10,
+            "skedda-1",
+            DateTimeOffset.UtcNow,
+            null,
+            null,
+            null);
+        var links = new Mock<IBookingCancellationLinkRepository>();
+        links.Setup(x => x.GetByMessageAsync(5, 10, It.IsAny<CancellationToken>())).ReturnsAsync(link);
+        links.Setup(x => x.TryMarkReminderSentAsync(5, 10, AttendanceReminderUseCase.ReminderType24h, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var notification = new Mock<INotificationSender>();
+        notification.Setup(x => x.GetThumbsUpReactionCountAsync(5, 10, It.IsAny<CancellationToken>())).ReturnsAsync(1);
+        var useCase = new AttendanceReminderUseCase(links.Object, notification.Object, NullLogger<AttendanceReminderUseCase>.Instance);
+
+        await useCase.ExecuteAsync(5, 10, AttendanceReminderUseCase.ReminderType24h, CancellationToken.None);
+
+        notification.Verify(
+            x => x.NotifyMessageAsync(
+                It.Is<string>(text => text.Contains("завтра корт заброньований", StringComparison.Ordinal)),
+                It.IsAny<CancellationToken>(),
+                10),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task AttendanceReminder_DoesNotSend_WhenThumbsUpCountIsEnough()
+    {
+        var link = new BookingCancellationLink(
+            BasicDomainConfig(),
+            new BookingSlot(new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero)),
+            5,
+            10,
+            "skedda-1",
+            DateTimeOffset.UtcNow,
+            null,
+            null,
+            null);
+        var links = new Mock<IBookingCancellationLinkRepository>();
+        links.Setup(x => x.GetByMessageAsync(5, 10, It.IsAny<CancellationToken>())).ReturnsAsync(link);
+        links.Setup(x => x.TryMarkReminderSentAsync(5, 10, AttendanceReminderUseCase.ReminderType2h, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var notification = new Mock<INotificationSender>();
+        notification.Setup(x => x.GetThumbsUpReactionCountAsync(5, 10, It.IsAny<CancellationToken>())).ReturnsAsync(2);
+        var useCase = new AttendanceReminderUseCase(links.Object, notification.Object, NullLogger<AttendanceReminderUseCase>.Instance);
+
+        await useCase.ExecuteAsync(5, 10, AttendanceReminderUseCase.ReminderType2h, CancellationToken.None);
+
+        notification.Verify(x => x.NotifyMessageAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<int?>()), Times.Never);
     }
 
     [Fact]
@@ -330,6 +390,8 @@ public class UnitTests
             FallbackUserConfigId = userConfigId;
             FallbackStartTime = startTime;
         }
+
+        public void ScheduleAttendanceCheck(long chatId, int telegramMessageId, DateTimeOffset slotStartUtc, string reminderType, DateTimeOffset runAtUtc) { }
 
         public void ScheduleRecurringPreparation(BookingUserConfig userConfig) { }
     }

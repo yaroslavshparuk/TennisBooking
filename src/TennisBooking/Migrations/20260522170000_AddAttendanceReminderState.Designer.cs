@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using TennisBooking.DAL;
@@ -11,9 +12,11 @@ using TennisBooking.DAL;
 namespace TennisBooking.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260522170000_AddAttendanceReminderState")]
+    partial class AddAttendanceReminderState
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -30,14 +33,14 @@ namespace TennisBooking.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
 
-                    b.Property<int?>("CancelRequestMessageId")
-                        .HasColumnType("integer");
-
                     b.Property<DateTimeOffset?>("AttendanceReminder24hSentAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTimeOffset?>("AttendanceReminder2hSentAtUtc")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("CancelRequestMessageId")
+                        .HasColumnType("integer");
 
                     b.Property<DateTimeOffset?>("CancelledAtUtc")
                         .HasColumnType("timestamp with time zone");

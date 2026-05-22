@@ -9,6 +9,7 @@ public sealed class ExecuteBookingUseCase
     private readonly INotificationSender _notificationSender;
     private readonly IBookingDeduplicationStore _deduplicationStore;
     private readonly IBookingCancellationLinkRepository _bookingCancellationLinkRepository;
+    private readonly IBookingScheduler _bookingScheduler;
     private readonly ILogger<ExecuteBookingUseCase> _logger;
 
     public ExecuteBookingUseCase(
@@ -16,12 +17,14 @@ public sealed class ExecuteBookingUseCase
         INotificationSender notificationSender,
         IBookingDeduplicationStore deduplicationStore,
         IBookingCancellationLinkRepository bookingCancellationLinkRepository,
+        IBookingScheduler bookingScheduler,
         ILogger<ExecuteBookingUseCase> logger)
     {
         _skeddaClient = skeddaClient;
         _notificationSender = notificationSender;
         _deduplicationStore = deduplicationStore;
         _bookingCancellationLinkRepository = bookingCancellationLinkRepository;
+        _bookingScheduler = bookingScheduler;
         _logger = logger;
     }
 
@@ -69,6 +72,21 @@ public sealed class ExecuteBookingUseCase
                 telegramResult.ChatId,
                 telegramResult.MessageId,
                 bookResult.BookingId);
+
+            var reminder24hAt = booking.Slot.StartTime.ToUniversalTime().AddHours(-24);
+            var reminder2hAt = booking.Slot.StartTime.ToUniversalTime().AddHours(-2);
+            _bookingScheduler.ScheduleAttendanceCheck(
+                telegramResult.ChatId,
+                telegramResult.MessageId,
+                booking.Slot.StartTime.ToUniversalTime(),
+                AttendanceReminderUseCase.ReminderType24h,
+                reminder24hAt);
+            _bookingScheduler.ScheduleAttendanceCheck(
+                telegramResult.ChatId,
+                telegramResult.MessageId,
+                booking.Slot.StartTime.ToUniversalTime(),
+                AttendanceReminderUseCase.ReminderType2h,
+                reminder2hAt);
         }
         catch (Exception ex)
         {

@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using TennisBooking.Application.Abstractions;
+using TennisBooking.Application.Booking;
 using TennisBooking.DAL;
 using TennisBooking.DAL.Models;
 using TennisBooking.Domain.Booking;
@@ -93,7 +94,42 @@ public sealed class BookingCancellationLinkRepository : IBookingCancellationLink
             entity.TelegramMessageId,
             entity.SkeddaBookingId,
             entity.CreatedAtUtc,
-            entity.CancelledAtUtc);
+            entity.CancelledAtUtc,
+            entity.AttendanceReminder24hSentAtUtc,
+            entity.AttendanceReminder2hSentAtUtc);
+    }
+
+    public async Task<BookingCancellationLink?> GetByMessageAsync(long chatId, int telegramMessageId, CancellationToken cancellationToken)
+    {
+        var entity = await _db.BookingCancellationLinks
+            .AsNoTracking()
+            .FirstOrDefaultAsync(
+                x => x.ChatId == chatId && x.TelegramMessageId == telegramMessageId,
+                cancellationToken);
+
+        if (entity is null)
+            return null;
+
+        var userConfig = new BookingUserConfig(
+            entity.UserConfigId,
+            entity.Username,
+            entity.Password,
+            entity.ResourceId,
+            entity.Venue,
+            entity.VenueUser,
+            entity.DayOfWeek,
+            entity.Hour);
+
+        return new BookingCancellationLink(
+            userConfig,
+            new BookingSlot(entity.SlotStartUtc),
+            entity.ChatId,
+            entity.TelegramMessageId,
+            entity.SkeddaBookingId,
+            entity.CreatedAtUtc,
+            entity.CancelledAtUtc,
+            entity.AttendanceReminder24hSentAtUtc,
+            entity.AttendanceReminder2hSentAtUtc);
     }
 
     public async Task<bool> TryMarkCancelledAsync(long chatId, int repliedTelegramMessageId, int cancelRequestMessageId, CancellationToken cancellationToken)
@@ -119,6 +155,36 @@ public sealed class BookingCancellationLinkRepository : IBookingCancellationLink
             chatId,
             repliedTelegramMessageId,
             cancelRequestMessageId);
+        return true;
+    }
+
+    public async Task<bool> TryMarkReminderSentAsync(long chatId, int telegramMessageId, string reminderType, CancellationToken cancellationToken)
+    {
+        var entity = await _db.BookingCancellationLinks.FirstOrDefaultAsync(
+            x => x.ChatId == chatId && x.TelegramMessageId == telegramMessageId,
+            cancellationToken);
+
+        if (entity is null || entity.CancelledAtUtc.HasValue)
+            return false;
+
+        if (string.Equals(reminderType, AttendanceReminderUseCase.ReminderType24h, StringComparison.Ordinal))
+        {
+            if (entity.AttendanceReminder24hSentAtUtc.HasValue)
+                return false;
+            entity.AttendanceReminder24hSentAtUtc = DateTimeOffset.UtcNow;
+        }
+        else if (string.Equals(reminderType, AttendanceReminderUseCase.ReminderType2h, StringComparison.Ordinal))
+        {
+            if (entity.AttendanceReminder2hSentAtUtc.HasValue)
+                return false;
+            entity.AttendanceReminder2hSentAtUtc = DateTimeOffset.UtcNow;
+        }
+        else
+        {
+            throw new ArgumentOutOfRangeException(nameof(reminderType), reminderType, "Unsupported reminder type.");
+        }
+
+        await _db.SaveChangesAsync(cancellationToken);
         return true;
     }
 }
