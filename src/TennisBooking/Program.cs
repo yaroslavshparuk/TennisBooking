@@ -109,6 +109,7 @@ otelBuilder.WithMetrics(metrics =>
         .AddHttpClientInstrumentation()
         .AddProcessInstrumentation()
         .AddRuntimeInstrumentation()
+        .AddMeter("System.Runtime")
         .AddMeter("TennisBooking.*")
         .AddMeter("Hangfire.*")
         .AddOtlpExporter(o => o.Endpoint = otlpEndpoint);
