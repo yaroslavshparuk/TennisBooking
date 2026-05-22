@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using TennisBooking.Application.Abstractions;
 using TennisBooking.DAL;
 using TennisBooking.DAL.Models;
@@ -9,10 +10,12 @@ namespace TennisBooking.Infrastructure.Persistence;
 public sealed class BookingCancellationLinkRepository : IBookingCancellationLinkRepository
 {
     private readonly ApplicationDbContext _db;
+    private readonly ILogger<BookingCancellationLinkRepository> _logger;
 
-    public BookingCancellationLinkRepository(ApplicationDbContext db)
+    public BookingCancellationLinkRepository(ApplicationDbContext db, ILogger<BookingCancellationLinkRepository> logger)
     {
         _db = db;
+        _logger = logger;
     }
 
     public async Task SaveAsync(
@@ -43,6 +46,11 @@ public sealed class BookingCancellationLinkRepository : IBookingCancellationLink
 
         _db.BookingCancellationLinks.Add(entity);
         await _db.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation(
+            "Saved booking cancellation link: chat {ChatId}, message {MessageId}, booking {SkeddaBookingId}",
+            chatId,
+            telegramMessageId,
+            skeddaBookingId);
     }
 
     public async Task<BookingCancellationLink?> GetByReplyAsync(long chatId, int repliedTelegramMessageId, CancellationToken cancellationToken)
@@ -54,7 +62,19 @@ public sealed class BookingCancellationLinkRepository : IBookingCancellationLink
                 cancellationToken);
 
         if (entity is null)
+        {
+            _logger.LogInformation(
+                "No cancellation link found for chat {ChatId}, replied message {RepliedMessageId}",
+                chatId,
+                repliedTelegramMessageId);
             return null;
+        }
+
+        _logger.LogInformation(
+            "Found cancellation link for chat {ChatId}, replied message {RepliedMessageId}, booking {SkeddaBookingId}",
+            chatId,
+            repliedTelegramMessageId,
+            entity.SkeddaBookingId);
 
         var userConfig = new BookingUserConfig(
             entity.UserConfigId,
@@ -83,11 +103,22 @@ public sealed class BookingCancellationLinkRepository : IBookingCancellationLink
             cancellationToken);
 
         if (entity is null || entity.CancelledAtUtc.HasValue)
+        {
+            _logger.LogInformation(
+                "Cancellation mark skipped for chat {ChatId}, replied message {RepliedMessageId}: entity missing or already cancelled",
+                chatId,
+                repliedTelegramMessageId);
             return false;
+        }
 
         entity.CancelledAtUtc = DateTimeOffset.UtcNow;
         entity.CancelRequestMessageId = cancelRequestMessageId;
         await _db.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation(
+            "Marked cancellation link as cancelled: chat {ChatId}, replied message {RepliedMessageId}, cancel request message {CancelRequestMessageId}",
+            chatId,
+            repliedTelegramMessageId,
+            cancelRequestMessageId);
         return true;
     }
 }

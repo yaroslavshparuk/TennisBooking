@@ -34,14 +34,20 @@ public sealed class TelegramLongPollingService : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (string.IsNullOrWhiteSpace(_options.BotToken))
+        {
+            _logger.LogWarning("Telegram long polling is disabled because BotToken is empty");
             return;
+        }
 
         var offset = await LoadOffsetAsync(stoppingToken);
+        _logger.LogInformation("Telegram long polling started with offset {Offset}", offset);
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
                 var updates = await GetUpdatesAsync(offset, stoppingToken);
+                if (updates.Count > 0)
+                    _logger.LogInformation("Received {Count} Telegram updates starting from offset {Offset}", updates.Count, offset);
                 foreach (var update in updates)
                 {
                     offset = Math.Max(offset, update.UpdateId + 1);
@@ -51,6 +57,7 @@ public sealed class TelegramLongPollingService : BackgroundService
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
+                _logger.LogInformation("Telegram long polling stopped by cancellation");
                 return;
             }
             catch (Exception ex)
@@ -66,7 +73,9 @@ public sealed class TelegramLongPollingService : BackgroundService
         using var scope = _scopeFactory.CreateScope();
         var stateRepo = scope.ServiceProvider.GetRequiredService<ITelegramPollingStateRepository>();
         var lastProcessed = await stateRepo.GetLastProcessedUpdateIdAsync(cancellationToken);
-        return lastProcessed.HasValue ? lastProcessed.Value + 1 : 0;
+        var offset = lastProcessed.HasValue ? lastProcessed.Value + 1 : 0;
+        _logger.LogInformation("Loaded Telegram polling offset {Offset}", offset);
+        return offset;
     }
 
     private async Task SaveOffsetAsync(long updateId, CancellationToken cancellationToken)
@@ -74,6 +83,7 @@ public sealed class TelegramLongPollingService : BackgroundService
         using var scope = _scopeFactory.CreateScope();
         var stateRepo = scope.ServiceProvider.GetRequiredService<ITelegramPollingStateRepository>();
         await stateRepo.SaveLastProcessedUpdateIdAsync(updateId, cancellationToken);
+        _logger.LogDebug("Saved Telegram polling offset for update {UpdateId}", updateId);
     }
 
     private async Task<IReadOnlyList<TelegramUpdate>> GetUpdatesAsync(long offset, CancellationToken cancellationToken)
@@ -93,10 +103,22 @@ public sealed class TelegramLongPollingService : BackgroundService
     {
         var message = update.Message;
         if (message?.Chat?.Id != _options.ChatId || string.IsNullOrWhiteSpace(message.Text))
+        {
+            _logger.LogDebug("Ignoring Telegram update {UpdateId}: no text or unexpected chat", update.UpdateId);
             return;
+        }
 
         if (!string.Equals(message.Text.Trim(), "/cancel", StringComparison.Ordinal))
+        {
+            _logger.LogDebug("Ignoring Telegram message {MessageId}: unsupported command text '{Text}'", message.MessageId, message.Text);
             return;
+        }
+
+        _logger.LogInformation(
+            "Processing /cancel command from chat {ChatId}, message {MessageId}, replyTo {ReplyToMessageId}",
+            message.Chat.Id,
+            message.MessageId,
+            message.ReplyToMessage?.MessageId);
 
         using var scope = _scopeFactory.CreateScope();
         var links = scope.ServiceProvider.GetRequiredService<IBookingCancellationLinkRepository>();
@@ -106,20 +128,28 @@ public sealed class TelegramLongPollingService : BackgroundService
         var repliedMessageId = message.ReplyToMessage?.MessageId;
         if (!repliedMessageId.HasValue)
         {
-            await notification.NotifyMessageAsync("Use /cancel as a reply to the booking confirmation message.", cancellationToken);
+            _logger.LogInformation("Rejecting /cancel message {MessageId}: not sent as reply", message.MessageId);
+            await notification.NotifyMessageAsync("Використай /cancel як відповідь на повідомлення про бронювання.", cancellationToken);
             return;
         }
 
         var link = await links.GetByReplyAsync(message.Chat.Id, repliedMessageId.Value, cancellationToken);
         if (link is null)
         {
-            await notification.NotifyMessageAsync("I couldn't find a booking for that message.", cancellationToken);
+            _logger.LogInformation(
+                "Rejecting /cancel message {MessageId}: no booking link for replied message {RepliedMessageId}",
+                message.MessageId,
+                repliedMessageId.Value);
+            await notification.NotifyMessageAsync("Не знайшов бронювання для цього повідомлення.", cancellationToken);
             return;
         }
 
         if (link.CancelledAtUtc.HasValue)
         {
-            await notification.NotifyMessageAsync("This booking is already cancelled.", cancellationToken);
+            _logger.LogInformation(
+                "Skipping /cancel for booking {SkeddaBookingId}: already cancelled",
+                link.SkeddaBookingId);
+            await notification.NotifyMessageAsync("Це бронювання вже скасовано.", cancellationToken);
             return;
         }
 
@@ -134,11 +164,15 @@ public sealed class TelegramLongPollingService : BackgroundService
         var marked = await links.TryMarkCancelledAsync(message.Chat.Id, repliedMessageId.Value, message.MessageId, cancellationToken);
         if (!marked)
         {
-            await notification.NotifyMessageAsync("This booking is already cancelled.", cancellationToken);
+            _logger.LogInformation(
+                "Cancellation race detected for booking {SkeddaBookingId}: already cancelled by another request",
+                link.SkeddaBookingId);
+            await notification.NotifyMessageAsync("Це бронювання вже скасовано.", cancellationToken);
             return;
         }
 
-        await notification.NotifyMessageAsync($"Cancelled booking {link.SkeddaBookingId}.", cancellationToken);
+        _logger.LogInformation("Cancellation completed for booking {SkeddaBookingId}", link.SkeddaBookingId);
+        await notification.NotifyMessageAsync($"Скасував бронювання {link.SkeddaBookingId}.", cancellationToken);
     }
 
     private sealed class TelegramUpdatesResponse

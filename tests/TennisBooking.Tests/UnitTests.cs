@@ -5,6 +5,7 @@ using Hangfire.Dashboard;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -75,7 +76,8 @@ public class UnitTests
             skedda.Object,
             notification.Object,
             new InMemoryBookingDeduplicationStore(),
-            Mock.Of<IBookingCancellationLinkRepository>());
+            Mock.Of<IBookingCancellationLinkRepository>(),
+            NullLogger<ExecuteBookingUseCase>.Instance);
         var booking = Prepared(BasicDomainConfig(), new BookingSlot(new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero)));
 
         await useCase.ExecuteAsync(booking, CancellationToken.None);
@@ -106,7 +108,8 @@ public class UnitTests
             skedda.Object,
             notification.Object,
             new InMemoryBookingDeduplicationStore(),
-            Mock.Of<IBookingCancellationLinkRepository>());
+            Mock.Of<IBookingCancellationLinkRepository>(),
+            NullLogger<ExecuteBookingUseCase>.Instance);
         var fallback = new BookingFallbackUseCase(new UserBookingConfigRepository(db), skedda.Object, execute);
 
         await fallback.ExecuteAsync(entity.Id, prepared.Slot.StartTime, CancellationToken.None);
@@ -125,7 +128,8 @@ public class UnitTests
                 Mock.Of<ISkeddaClient>(),
                 Mock.Of<INotificationSender>(),
                 new InMemoryBookingDeduplicationStore(),
-                Mock.Of<IBookingCancellationLinkRepository>()));
+                Mock.Of<IBookingCancellationLinkRepository>(),
+                NullLogger<ExecuteBookingUseCase>.Instance));
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             fallback.ExecuteAsync(999, DateTimeOffset.UtcNow, CancellationToken.None));
@@ -141,7 +145,9 @@ public class UnitTests
             return "<html>no token</html>";
         });
 
-        var client = new SkeddaClient(Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = server.BaseUrl }));
+        var client = new SkeddaClient(
+            Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = server.BaseUrl }),
+            NullLogger<SkeddaClient>.Instance);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             client.PrepareBookingAsync(BasicDomainConfig(), new BookingSlot(DateTimeOffset.UtcNow), CancellationToken.None));
@@ -158,7 +164,9 @@ public class UnitTests
             ctx.Response.StatusCode = 200;
             return """{"booking":{"id":"1"}}""";
         });
-        var client = new SkeddaClient(Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = skedda.BaseUrl }));
+        var client = new SkeddaClient(
+            Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = skedda.BaseUrl }),
+            NullLogger<SkeddaClient>.Instance);
         var booking = Prepared(BasicDomainConfig(), new BookingSlot(DateTimeOffset.UtcNow));
 
         await client.BookAsync(booking, CancellationToken.None);
