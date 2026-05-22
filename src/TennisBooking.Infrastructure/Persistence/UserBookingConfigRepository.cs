@@ -29,7 +29,10 @@ public sealed class UserBookingConfigRepository : IUserBookingConfigRepository
 
     public async Task<BookingUserConfig?> FirstOrDefaultAsync(CancellationToken cancellationToken)
     {
-        var entity = await _db.UserConfigs.AsNoTracking().FirstOrDefaultAsync(cancellationToken);
+        var entity = await _db.UserConfigs
+            .AsNoTracking()
+            .OrderBy(x => x.Id)
+            .FirstOrDefaultAsync(cancellationToken);
         return entity is null ? null : ToDomain(entity);
     }
 

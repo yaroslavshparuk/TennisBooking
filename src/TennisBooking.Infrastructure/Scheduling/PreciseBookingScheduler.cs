@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -15,6 +16,7 @@ public sealed class PreciseBookingScheduler : IPreciseBookingScheduler, IHostedS
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<PreciseBookingScheduler> _logger;
     private readonly CancellationTokenSource _stoppingCts = new();
+    private int _disposeState;
 
     public PreciseBookingScheduler(IServiceScopeFactory scopeFactory, ILogger<PreciseBookingScheduler> logger)
     {
@@ -26,7 +28,7 @@ public sealed class PreciseBookingScheduler : IPreciseBookingScheduler, IHostedS
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
-        _stoppingCts.Cancel();
+        TryCancelStoppingToken();
         return Task.CompletedTask;
     }
 
@@ -85,7 +87,22 @@ public sealed class PreciseBookingScheduler : IPreciseBookingScheduler, IHostedS
 
     public void Dispose()
     {
-        _stoppingCts.Cancel();
+        if (Interlocked.Exchange(ref _disposeState, 1) != 0)
+            return;
+
+        TryCancelStoppingToken();
         _stoppingCts.Dispose();
+    }
+
+    private void TryCancelStoppingToken()
+    {
+        try
+        {
+            _stoppingCts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            _logger.LogDebug("Precise booking scheduler cancellation token source was already disposed");
+        }
     }
 }
