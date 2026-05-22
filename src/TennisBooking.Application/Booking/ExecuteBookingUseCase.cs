@@ -7,15 +7,18 @@ public sealed class ExecuteBookingUseCase
     private readonly ISkeddaClient _skeddaClient;
     private readonly INotificationSender _notificationSender;
     private readonly IBookingDeduplicationStore _deduplicationStore;
+    private readonly IBookingCancellationLinkRepository _bookingCancellationLinkRepository;
 
     public ExecuteBookingUseCase(
         ISkeddaClient skeddaClient,
         INotificationSender notificationSender,
-        IBookingDeduplicationStore deduplicationStore)
+        IBookingDeduplicationStore deduplicationStore,
+        IBookingCancellationLinkRepository bookingCancellationLinkRepository)
     {
         _skeddaClient = skeddaClient;
         _notificationSender = notificationSender;
         _deduplicationStore = deduplicationStore;
+        _bookingCancellationLinkRepository = bookingCancellationLinkRepository;
     }
 
     public async Task ExecuteAsync(PreparedBooking? booking, CancellationToken cancellationToken)
@@ -29,8 +32,15 @@ public sealed class ExecuteBookingUseCase
 
         try
         {
-            await _skeddaClient.BookAsync(booking, cancellationToken);
-            await _notificationSender.NotifyBookingSucceededAsync(booking.UserConfig, booking.Slot, cancellationToken);
+            var bookResult = await _skeddaClient.BookAsync(booking, cancellationToken);
+            var telegramResult = await _notificationSender.NotifyBookingSucceededAsync(booking.UserConfig, booking.Slot, cancellationToken);
+            await _bookingCancellationLinkRepository.SaveAsync(
+                booking.UserConfig,
+                booking.Slot,
+                telegramResult.ChatId,
+                telegramResult.MessageId,
+                bookResult.BookingId,
+                cancellationToken);
         }
         catch
         {

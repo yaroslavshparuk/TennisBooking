@@ -80,7 +80,7 @@ public sealed class BookingPostgresIntegrationTests
         {
             bookingPosts++;
             ctx.Response.StatusCode = 200;
-            return "{}";
+            return """{"booking":{"id":"1"}}""";
         });
 
         var userConfig = NewConfig("postgres-fallback");
@@ -88,10 +88,14 @@ public sealed class BookingPostgresIntegrationTests
         await db.SaveChangesAsync();
 
         var skeddaClient = new SkeddaClient(Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = skedda.BaseUrl }));
+        var notification = new Mock<INotificationSender>();
+        notification.Setup(x => x.NotifyBookingSucceededAsync(It.IsAny<BookingUserConfig>(), It.IsAny<BookingSlot>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new TelegramNotificationResult(5, 10));
         var execute = new ExecuteBookingUseCase(
             skeddaClient,
-            Mock.Of<INotificationSender>(),
-            new InMemoryBookingDeduplicationStore());
+            notification.Object,
+            new InMemoryBookingDeduplicationStore(),
+            new BookingCancellationLinkRepository(db));
         var fallback = new BookingFallbackUseCase(new UserBookingConfigRepository(db), skeddaClient, execute);
         var startTime = new DateTimeOffset(2030, 1, 1, userConfig.Hour, 0, 0, TimeSpan.Zero);
 
@@ -114,7 +118,7 @@ public sealed class BookingPostgresIntegrationTests
         {
             bookingPosts++;
             ctx.Response.StatusCode = 200;
-            return "{}";
+            return """{"booking":{"id":"1"}}""";
         });
         EnqueuePreparationResponses(skedda);
 
@@ -122,9 +126,16 @@ public sealed class BookingPostgresIntegrationTests
         db.UserConfigs.Add(userConfig);
         await db.SaveChangesAsync();
 
+        var notification = new Mock<INotificationSender>();
+        notification.Setup(x => x.NotifyBookingSucceededAsync(It.IsAny<BookingUserConfig>(), It.IsAny<BookingSlot>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new TelegramNotificationResult(5, 10));
         var skeddaClient = new SkeddaClient(Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = skedda.BaseUrl }));
         var dedupe = new InMemoryBookingDeduplicationStore();
-        var execute = new ExecuteBookingUseCase(skeddaClient, Mock.Of<INotificationSender>(), dedupe);
+        var execute = new ExecuteBookingUseCase(
+            skeddaClient,
+            notification.Object,
+            dedupe,
+            new BookingCancellationLinkRepository(db));
         var fallback = new BookingFallbackUseCase(new UserBookingConfigRepository(db), skeddaClient, execute);
         var startTime = new DateTimeOffset(2030, 1, 1, userConfig.Hour, 0, 0, TimeSpan.Zero);
 

@@ -27,7 +27,7 @@ public sealed class TelegramNotificationSender : INotificationSender
         _logger = logger;
     }
 
-    public async Task NotifyBookingSucceededAsync(
+    public async Task<TelegramNotificationResult> NotifyBookingSucceededAsync(
         BookingUserConfig userConfig,
         BookingSlot slot,
         CancellationToken cancellationToken)
@@ -40,19 +40,42 @@ public sealed class TelegramNotificationSender : INotificationSender
 
         try
         {
-            var url = $"{BaseUrlPrefix}{_options.BotToken}/sendMessage";
-            var payload = new { chat_id = _options.ChatId, text = message, parse_mode = "MarkdownV2" };
-            var content = new StringContent(
-                JsonSerializer.Serialize(payload),
-                Encoding.UTF8,
-                "application/json");
-
-            var resp = await _http.PostAsync(url, content, cancellationToken);
-            resp.EnsureSuccessStatusCode();
+            return await SendMessageInternalAsync(message, "MarkdownV2", cancellationToken);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to send Telegram notification");
+            return new TelegramNotificationResult(_options.ChatId, 0);
         }
+    }
+
+    public async Task NotifyMessageAsync(string message, CancellationToken cancellationToken)
+        => await SendMessageInternalAsync(message, null, cancellationToken);
+
+    private async Task<TelegramNotificationResult> SendMessageInternalAsync(
+        string message,
+        string? parseMode,
+        CancellationToken cancellationToken)
+    {
+        var url = $"{BaseUrlPrefix}{_options.BotToken}/sendMessage";
+        var payload = new Dictionary<string, object?>
+        {
+            ["chat_id"] = _options.ChatId,
+            ["text"] = message
+        };
+        if (!string.IsNullOrWhiteSpace(parseMode))
+            payload["parse_mode"] = parseMode;
+
+        var content = new StringContent(
+            JsonSerializer.Serialize(payload),
+            Encoding.UTF8);
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+
+        var resp = await _http.PostAsync(url, content, cancellationToken);
+        resp.EnsureSuccessStatusCode();
+        var json = await resp.Content.ReadAsStringAsync(cancellationToken);
+        using var doc = JsonDocument.Parse(json);
+        var messageId = doc.RootElement.GetProperty("result").GetProperty("message_id").GetInt32();
+        return new TelegramNotificationResult(_options.ChatId, messageId);
     }
 }

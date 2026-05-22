@@ -34,6 +34,58 @@ public sealed class SkeddaClient : ISkeddaClient
         BookingSlot slot,
         CancellationToken cancellationToken)
     {
+        var session = await CreateSessionAsync(userConfig, cancellationToken);
+        return new PreparedBooking(
+            userConfig,
+            slot,
+            BuildBookingBody(userConfig, slot),
+            session.RequestVerificationToken,
+            session.CsrfCookie,
+            session.ApplicationCookie);
+    }
+
+    public async Task<SkeddaBookingResult> BookAsync(PreparedBooking booking, CancellationToken cancellationToken)
+    {
+        var baseUri = new Uri(_options.ApiBaseUrl);
+        using var client = new HttpClient { BaseAddress = baseUri };
+
+        var bookReq = new HttpRequestMessage(HttpMethod.Post, BookingPath);
+        bookReq.Content = JsonContent(booking.Body);
+        bookReq.Headers.Add(CsrfHeaderName, booking.RequestVerificationToken);
+        bookReq.Headers.Add(CookieHeaderName,
+            $"{CsrfCookieName}={booking.CsrfCookie}; {ApplicationCookieName}={booking.ApplicationCookie}");
+
+        var bookResp = await client.SendAsync(bookReq, cancellationToken);
+        if (!bookResp.IsSuccessStatusCode)
+            throw new HttpRequestException($"Response from Skedda {await bookResp.Content.ReadAsStringAsync(cancellationToken)}");
+
+        var body = await bookResp.Content.ReadAsStringAsync(cancellationToken);
+        dynamic? json = JsonConvert.DeserializeObject(body);
+        var bookingId = (string?)json?.booking?.id;
+        if (string.IsNullOrWhiteSpace(bookingId))
+            throw new InvalidOperationException("Skedda booking id was not found in response.");
+
+        return new SkeddaBookingResult(bookingId);
+    }
+
+    public async Task CancelAsync(PreparedBooking booking, string bookingId, CancellationToken cancellationToken)
+    {
+        var session = await CreateSessionAsync(booking.UserConfig, cancellationToken);
+
+        var baseUri = new Uri(_options.ApiBaseUrl);
+        using var client = new HttpClient { BaseAddress = baseUri };
+        var deleteReq = new HttpRequestMessage(HttpMethod.Delete, $"{BookingPath}/{bookingId}");
+        deleteReq.Headers.Add(CsrfHeaderName, session.RequestVerificationToken);
+        deleteReq.Headers.Add(CookieHeaderName,
+            $"{CsrfCookieName}={session.CsrfCookie}; {ApplicationCookieName}={session.ApplicationCookie}");
+
+        var deleteResp = await client.SendAsync(deleteReq, cancellationToken);
+        if (!deleteResp.IsSuccessStatusCode)
+            throw new HttpRequestException($"Response from Skedda {await deleteResp.Content.ReadAsStringAsync(cancellationToken)}");
+    }
+
+    private async Task<SessionData> CreateSessionAsync(BookingUserConfig userConfig, CancellationToken cancellationToken)
+    {
         var handler = new HttpClientHandler { CookieContainer = new CookieContainer() };
         var baseUri = new Uri(_options.ApiBaseUrl);
         using var client = new HttpClient(handler) { BaseAddress = baseUri };
@@ -74,32 +126,7 @@ public sealed class SkeddaClient : ISkeddaClient
         getBookingsResp.EnsureSuccessStatusCode();
         requestVerificationToken = GetRequestVerificationToken(
             await getBookingsResp.Content.ReadAsStringAsync(cancellationToken));
-
-        return new PreparedBooking(
-            userConfig,
-            slot,
-            BuildBookingBody(userConfig, slot),
-            requestVerificationToken,
-            csrfCookie,
-            applicationCookie);
-    }
-
-    public async Task BookAsync(PreparedBooking booking, CancellationToken cancellationToken)
-    {
-        var baseUri = new Uri(_options.ApiBaseUrl);
-        using var client = new HttpClient { BaseAddress = baseUri };
-
-        var bookReq = new HttpRequestMessage(HttpMethod.Post, BookingPath);
-        bookReq.Content = JsonContent(booking.Body);
-        bookReq.Headers.Add(CsrfHeaderName, booking.RequestVerificationToken);
-        bookReq.Headers.Add(CookieHeaderName,
-            $"{CsrfCookieName}={booking.CsrfCookie}; {ApplicationCookieName}={booking.ApplicationCookie}");
-
-        var bookResp = await client.SendAsync(bookReq, cancellationToken);
-        if (!bookResp.IsSuccessStatusCode)
-            throw new HttpRequestException($"Response from Skedda {await bookResp.Content.ReadAsStringAsync(cancellationToken)}");
-
-        bookResp.EnsureSuccessStatusCode();
+        return new SessionData(requestVerificationToken, csrfCookie, applicationCookie);
     }
 
     private static StringContent JsonContent(object value)
@@ -153,4 +180,6 @@ public sealed class SkeddaClient : ISkeddaClient
 
         return match.Groups[1].Value;
     }
+
+    private sealed record SessionData(string RequestVerificationToken, string CsrfCookie, string ApplicationCookie);
 }
