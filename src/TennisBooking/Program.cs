@@ -7,6 +7,7 @@ using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
+using Npgsql;
 using TennisBooking.Auth;
 using TennisBooking.Application.Abstractions;
 using TennisBooking.Application.Booking;
@@ -28,6 +29,7 @@ builder.Services.AddHttpClient<TelegramNotificationSender>();
 
 var connString = builder.Configuration.GetConnectionString("Default")
                  ?? throw new InvalidOperationException("Connection string 'Default' not found.");
+builder.Services.AddSingleton(new NpgsqlDataSourceBuilder(connString).Build());
 builder.Services.AddDbContext<ApplicationDbContext>(opt =>
     opt.UseNpgsql(connString, pg => pg.MigrationsAssembly(typeof(Program).Assembly.GetName().Name)));
 
