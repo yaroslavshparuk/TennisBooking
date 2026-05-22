@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Npgsql;
 using TennisBooking.Application.Abstractions;
 using TennisBooking.Application.Booking;
 using TennisBooking.Options;
@@ -16,17 +17,21 @@ public sealed class TelegramLongPollingService : BackgroundService
     private const string BaseUrlPrefix = "https://api.telegram.org/bot";
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly NpgsqlDataSource _npgsqlDataSource;
     private readonly TelegramOptions _options;
     private readonly ILogger<TelegramLongPollingService> _logger;
+    private NpgsqlConnection? _lockConnection;
 
     public TelegramLongPollingService(
         IServiceScopeFactory scopeFactory,
         IHttpClientFactory httpClientFactory,
+        NpgsqlDataSource npgsqlDataSource,
         IOptions<TelegramOptions> options,
         ILogger<TelegramLongPollingService> logger)
     {
         _scopeFactory = scopeFactory;
         _httpClientFactory = httpClientFactory;
+        _npgsqlDataSource = npgsqlDataSource;
         _options = options.Value;
         _logger = logger;
     }
@@ -39,20 +44,36 @@ public sealed class TelegramLongPollingService : BackgroundService
             return;
         }
 
-        var offset = await LoadOffsetAsync(stoppingToken);
-        _logger.LogInformation("Telegram long polling started with offset {Offset}", offset);
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                var updates = await GetUpdatesAsync(offset, stoppingToken);
-                if (updates.Count > 0)
-                    _logger.LogInformation("Received {Count} Telegram updates starting from offset {Offset}", updates.Count, offset);
-                foreach (var update in updates)
+                if (!await TryAcquireLeaderLockAsync(stoppingToken))
+                    continue;
+
+                await LogWebhookInfoAsync(stoppingToken);
+
+                var offset = await LoadOffsetAsync(stoppingToken);
+                _logger.LogInformation("Telegram long polling started with offset {Offset}", offset);
+                while (!stoppingToken.IsCancellationRequested)
                 {
-                    offset = Math.Max(offset, update.UpdateId + 1);
-                    await ProcessUpdateAsync(update, stoppingToken);
-                    await SaveOffsetAsync(update.UpdateId, stoppingToken);
+                    try
+                    {
+                        var updates = await GetUpdatesAsync(offset, stoppingToken);
+                        if (updates.Count > 0)
+                            _logger.LogInformation("Received {Count} Telegram updates starting from offset {Offset}", updates.Count, offset);
+                        foreach (var update in updates)
+                        {
+                            offset = Math.Max(offset, update.UpdateId + 1);
+                            await ProcessUpdateAsync(update, stoppingToken);
+                            await SaveOffsetAsync(update.UpdateId, stoppingToken);
+                        }
+                    }
+                    catch (TelegramPollingConflictException ex)
+                    {
+                        _logger.LogWarning(ex, "Telegram getUpdates conflict. This usually means active webhook or another poller. Backing off for {DelaySeconds}s", _options.PollingConflictBackoffSeconds);
+                        await Task.Delay(TimeSpan.FromSeconds(_options.PollingConflictBackoffSeconds), stoppingToken);
+                    }
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -65,6 +86,55 @@ public sealed class TelegramLongPollingService : BackgroundService
                 _logger.LogError(ex, "Telegram polling iteration failed");
                 await Task.Delay(TimeSpan.FromSeconds(3), stoppingToken);
             }
+            finally
+            {
+                await ReleaseLeaderLockAsync();
+            }
+        }
+    }
+
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await base.StopAsync(cancellationToken);
+        await ReleaseLeaderLockAsync();
+    }
+
+    private async Task<bool> TryAcquireLeaderLockAsync(CancellationToken cancellationToken)
+    {
+        if (_lockConnection is not null)
+            return true;
+
+        _lockConnection = await _npgsqlDataSource.OpenConnectionAsync(cancellationToken);
+        await using var cmd = _lockConnection.CreateCommand();
+        cmd.CommandText = "SELECT pg_try_advisory_lock(@key)";
+        cmd.Parameters.AddWithValue("key", _options.PollingLeaderLockKey);
+
+        var lockAcquired = (bool)(await cmd.ExecuteScalarAsync(cancellationToken) ?? false);
+        if (lockAcquired)
+        {
+            _logger.LogInformation("Acquired Telegram polling leader lock with key {LockKey}", _options.PollingLeaderLockKey);
+            return true;
+        }
+
+        await _lockConnection.DisposeAsync();
+        _lockConnection = null;
+        _logger.LogInformation("Telegram polling leader lock is held by another instance. Retrying in {DelaySeconds}s", _options.PollingStandbyRetrySeconds);
+        await Task.Delay(TimeSpan.FromSeconds(_options.PollingStandbyRetrySeconds), cancellationToken);
+        return false;
+    }
+
+    private async Task ReleaseLeaderLockAsync()
+    {
+        if (_lockConnection is null)
+            return;
+
+        try
+        {
+            await _lockConnection.DisposeAsync();
+        }
+        finally
+        {
+            _lockConnection = null;
         }
     }
 
@@ -93,10 +163,57 @@ public sealed class TelegramLongPollingService : BackgroundService
         var payload = new { offset, timeout = 40, allowed_updates = new[] { "message" } };
         var req = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
         var resp = await http.PostAsync(url, req, cancellationToken);
-        resp.EnsureSuccessStatusCode();
+
+        if (resp.StatusCode == System.Net.HttpStatusCode.Conflict)
+        {
+            var conflictBody = await resp.Content.ReadAsStringAsync(cancellationToken);
+            throw new TelegramPollingConflictException(
+                $"Telegram getUpdates returned 409 Conflict: {conflictBody}");
+        }
+
+        if (!resp.IsSuccessStatusCode)
+        {
+            var errorBody = await resp.Content.ReadAsStringAsync(cancellationToken);
+            throw new HttpRequestException(
+                $"Telegram getUpdates failed with {(int)resp.StatusCode} ({resp.StatusCode}). Body: {errorBody}",
+                null,
+                resp.StatusCode);
+        }
+
         var json = await resp.Content.ReadAsStringAsync(cancellationToken);
         var envelope = JsonSerializer.Deserialize<TelegramUpdatesResponse>(json) ?? new TelegramUpdatesResponse();
         return envelope.Result ?? [];
+    }
+
+    private async Task LogWebhookInfoAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var http = _httpClientFactory.CreateClient();
+            var url = $"{BaseUrlPrefix}{_options.BotToken}/getWebhookInfo";
+            var resp = await http.GetAsync(url, cancellationToken);
+            if (!resp.IsSuccessStatusCode)
+                return;
+
+            var json = await resp.Content.ReadAsStringAsync(cancellationToken);
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("result", out var result))
+                return;
+
+            var webhookUrl = result.TryGetProperty("url", out var urlNode) ? urlNode.GetString() : null;
+            if (string.IsNullOrWhiteSpace(webhookUrl))
+            {
+                _logger.LogInformation("Telegram webhook is not configured for this bot token");
+            }
+            else
+            {
+                _logger.LogWarning("Telegram webhook is configured ({WebhookUrl}); it can conflict with long polling", webhookUrl);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Unable to fetch Telegram webhook info");
+        }
     }
 
     private async Task ProcessUpdateAsync(TelegramUpdate update, CancellationToken cancellationToken)
@@ -211,5 +328,12 @@ public sealed class TelegramLongPollingService : BackgroundService
     {
         [JsonPropertyName("id")]
         public long Id { get; set; }
+    }
+
+    private sealed class TelegramPollingConflictException : Exception
+    {
+        public TelegramPollingConflictException(string message) : base(message)
+        {
+        }
     }
 }
