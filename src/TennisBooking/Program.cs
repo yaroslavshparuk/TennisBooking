@@ -36,6 +36,7 @@ if (pyroscopeEnabled)
     Environment.SetEnvironmentVariable(
         "PYROSCOPE_APPLICATION_NAME",
         builder.Configuration["Pyroscope:ApplicationName"] ?? "TennisBooking");
+    Environment.SetEnvironmentVariable("PYROSCOPE_PROFILING_ENABLED", "1");
 
     var pyroscopeProfiler = Pyroscope.Profiler.Instance;
     pyroscopeProfiler.SetCPUTrackingEnabled(true);

@@ -52,6 +52,10 @@ Configure the following environment variables:
 - `Pyroscope__ServerAddress` - Pyroscope server URL (required when enabled)
 - `Pyroscope__ApplicationName` - profiler application label (optional, defaults to `TennisBooking`)
 
+The Docker image now includes Pyroscope native profiler binaries and sets:
+`CORECLR_ENABLE_PROFILING`, `CORECLR_PROFILER`, `CORECLR_PROFILER_PATH`,
+`LD_PRELOAD`, and `LD_LIBRARY_PATH` automatically.
+
 For local development, you can use user secrets:
 ```bash
 dotnet user-secrets --project src/TennisBooking set "Telegram:BotToken" "<token>"
