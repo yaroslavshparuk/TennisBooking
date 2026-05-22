@@ -43,7 +43,7 @@ public sealed class TelegramNotificationSender : INotificationSender
 
         try
         {
-            return await SendMessageInternalAsync(message, "MarkdownV2", cancellationToken);
+            return await SendMessageInternalAsync(message, null, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -114,7 +114,14 @@ public sealed class TelegramNotificationSender : INotificationSender
         content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
 
         var resp = await _http.PostAsync(url, content, cancellationToken);
-        resp.EnsureSuccessStatusCode();
+        if (!resp.IsSuccessStatusCode)
+        {
+            var errorBody = await resp.Content.ReadAsStringAsync(cancellationToken);
+            throw new HttpRequestException(
+                $"Telegram sendMessage failed with {(int)resp.StatusCode} ({resp.StatusCode}). Body: {errorBody}",
+                null,
+                resp.StatusCode);
+        }
         var json = await resp.Content.ReadAsStringAsync(cancellationToken);
         using var doc = JsonDocument.Parse(json);
         var messageId = doc.RootElement.GetProperty("result").GetProperty("message_id").GetInt32();
