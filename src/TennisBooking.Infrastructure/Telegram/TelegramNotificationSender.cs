@@ -49,13 +49,14 @@ public sealed class TelegramNotificationSender : INotificationSender
         }
     }
 
-    public async Task NotifyMessageAsync(string message, CancellationToken cancellationToken)
-        => await SendMessageInternalAsync(message, null, cancellationToken);
+    public async Task NotifyMessageAsync(string message, CancellationToken cancellationToken, int? replyToMessageId = null)
+        => await SendMessageInternalAsync(message, null, cancellationToken, replyToMessageId);
 
     private async Task<TelegramNotificationResult> SendMessageInternalAsync(
         string message,
         string? parseMode,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int? replyToMessageId = null)
     {
         var url = $"{BaseUrlPrefix}{_options.BotToken}/sendMessage";
         var payload = new Dictionary<string, object?>
@@ -65,6 +66,8 @@ public sealed class TelegramNotificationSender : INotificationSender
         };
         if (!string.IsNullOrWhiteSpace(parseMode))
             payload["parse_mode"] = parseMode;
+        if (replyToMessageId.HasValue)
+            payload["reply_to_message_id"] = replyToMessageId.Value;
 
         var content = new StringContent(
             JsonSerializer.Serialize(payload),

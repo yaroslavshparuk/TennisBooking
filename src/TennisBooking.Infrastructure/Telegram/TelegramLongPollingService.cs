@@ -140,7 +140,7 @@ public sealed class TelegramLongPollingService : BackgroundService
                 "Rejecting /cancel message {MessageId}: no booking link for replied message {RepliedMessageId}",
                 message.MessageId,
                 repliedMessageId.Value);
-            await notification.NotifyMessageAsync("Не знайшов бронювання для цього повідомлення.", cancellationToken);
+            await notification.NotifyMessageAsync("Не знайшов бронювання для цього повідомлення.", cancellationToken, repliedMessageId.Value);
             return;
         }
 
@@ -149,7 +149,7 @@ public sealed class TelegramLongPollingService : BackgroundService
             _logger.LogInformation(
                 "Skipping /cancel for booking {SkeddaBookingId}: already cancelled",
                 link.SkeddaBookingId);
-            await notification.NotifyMessageAsync("Це бронювання вже скасовано.", cancellationToken);
+            await notification.NotifyMessageAsync("Це бронювання вже скасовано.", cancellationToken, repliedMessageId.Value);
             return;
         }
 
@@ -167,12 +167,12 @@ public sealed class TelegramLongPollingService : BackgroundService
             _logger.LogInformation(
                 "Cancellation race detected for booking {SkeddaBookingId}: already cancelled by another request",
                 link.SkeddaBookingId);
-            await notification.NotifyMessageAsync("Це бронювання вже скасовано.", cancellationToken);
+            await notification.NotifyMessageAsync("Це бронювання вже скасовано.", cancellationToken, repliedMessageId.Value);
             return;
         }
 
         _logger.LogInformation("Cancellation completed for booking {SkeddaBookingId}", link.SkeddaBookingId);
-        await notification.NotifyMessageAsync($"Скасував бронювання {link.SkeddaBookingId}.", cancellationToken);
+        await notification.NotifyMessageAsync("Бронювання скасовано.", cancellationToken, repliedMessageId.Value);
     }
 
     private sealed class TelegramUpdatesResponse

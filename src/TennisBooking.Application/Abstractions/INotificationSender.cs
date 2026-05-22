@@ -9,5 +9,5 @@ public interface INotificationSender
         BookingSlot slot,
         CancellationToken cancellationToken);
 
-    Task NotifyMessageAsync(string message, CancellationToken cancellationToken);
+    Task NotifyMessageAsync(string message, CancellationToken cancellationToken, int? replyToMessageId = null);
 }
