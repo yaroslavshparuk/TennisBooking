@@ -28,6 +28,18 @@ public sealed class HangfireBookingScheduler : IBookingScheduler
             x => x.ExecuteAsync(userConfigId, startTime, CancellationToken.None),
             runAt);
 
+    public void ScheduleAttendanceCheck(long chatId, int telegramMessageId, DateTimeOffset slotStartUtc, string reminderType, DateTimeOffset runAtUtc)
+    {
+        _ = slotStartUtc;
+        var target = runAtUtc < DateTimeOffset.UtcNow
+            ? DateTimeOffset.UtcNow.AddSeconds(1)
+            : runAtUtc;
+
+        _backgroundJobClient.Schedule<AttendanceReminderUseCase>(
+            x => x.ExecuteAsync(chatId, telegramMessageId, reminderType, CancellationToken.None),
+            target);
+    }
+
     public void ScheduleRecurringPreparation(BookingUserConfig userConfig)
         => RecurringJob.AddOrUpdate<PrepareBookingForConfigUseCase>(
             userConfig.Username,

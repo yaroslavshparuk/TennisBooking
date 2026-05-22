@@ -19,4 +19,6 @@ public class BookingCancellationLinkEntity
     public DateTimeOffset CreatedAtUtc { get; set; }
     public DateTimeOffset? CancelledAtUtc { get; set; }
     public int? CancelRequestMessageId { get; set; }
+    public DateTimeOffset? AttendanceReminder24hSentAtUtc { get; set; }
+    public DateTimeOffset? AttendanceReminder2hSentAtUtc { get; set; }
 }

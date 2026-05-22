@@ -100,6 +100,7 @@ public sealed class BookingPostgresIntegrationTests
             notification.Object,
             new InMemoryBookingDeduplicationStore(),
             new BookingCancellationLinkRepository(db, NullLogger<BookingCancellationLinkRepository>.Instance),
+            Mock.Of<IBookingScheduler>(),
             NullLogger<ExecuteBookingUseCase>.Instance);
         var fallback = new BookingFallbackUseCase(new UserBookingConfigRepository(db), skeddaClient, execute);
         var startTime = new DateTimeOffset(2030, 1, 1, userConfig.Hour, 0, 0, TimeSpan.Zero);
@@ -143,6 +144,7 @@ public sealed class BookingPostgresIntegrationTests
             notification.Object,
             dedupe,
             new BookingCancellationLinkRepository(db, NullLogger<BookingCancellationLinkRepository>.Instance),
+            Mock.Of<IBookingScheduler>(),
             NullLogger<ExecuteBookingUseCase>.Instance);
         var fallback = new BookingFallbackUseCase(new UserBookingConfigRepository(db), skeddaClient, execute);
         var startTime = new DateTimeOffset(2030, 1, 1, userConfig.Hour, 0, 0, TimeSpan.Zero);

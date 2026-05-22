@@ -129,7 +129,7 @@ public sealed class TelegramLongPollingService : BackgroundService
         if (!repliedMessageId.HasValue)
         {
             _logger.LogInformation("Rejecting /cancel message {MessageId}: not sent as reply", message.MessageId);
-            await notification.NotifyMessageAsync("Використай /cancel як відповідь на повідомлення про бронювання.", cancellationToken);
+            await notification.NotifyMessageAsync("Щоб відмінити бронювання, надішліть /cancel у відповідь на повідомлення про бронювання.", cancellationToken);
             return;
         }
 

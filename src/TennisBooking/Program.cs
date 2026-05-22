@@ -63,6 +63,7 @@ builder.Services.AddScoped<PrepareBookingUseCase>();
 builder.Services.AddScoped<PrepareBookingForConfigUseCase>();
 builder.Services.AddScoped<ExecuteBookingUseCase>();
 builder.Services.AddScoped<BookingFallbackUseCase>();
+builder.Services.AddScoped<AttendanceReminderUseCase>();
 builder.Services.AddScoped<ScheduleBookingsUseCase>();
 builder.Services.AddControllers();
 builder.Services.AddHealthChecks()

@@ -9,4 +9,6 @@ public sealed record BookingCancellationLink(
     int TelegramMessageId,
     string SkeddaBookingId,
     DateTimeOffset CreatedAtUtc,
-    DateTimeOffset? CancelledAtUtc);
+    DateTimeOffset? CancelledAtUtc,
+    DateTimeOffset? AttendanceReminder24hSentAtUtc,
+    DateTimeOffset? AttendanceReminder2hSentAtUtc);
