@@ -107,6 +107,7 @@ otelBuilder.WithMetrics(metrics =>
         .SetResourceBuilder(resourceBuilder)
         .AddAspNetCoreInstrumentation()
         .AddHttpClientInstrumentation()
+        .AddProcessInstrumentation()
         .AddRuntimeInstrumentation()
         .AddMeter("TennisBooking.*")
         .AddMeter("Hangfire.*")
