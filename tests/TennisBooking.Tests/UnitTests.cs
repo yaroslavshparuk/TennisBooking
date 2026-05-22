@@ -5,6 +5,7 @@ using Hangfire.Dashboard;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -66,11 +67,17 @@ public class UnitTests
     public async Task ExecuteBooking_DoesNotPostTwice_ForSameSlot()
     {
         var skedda = new Mock<ISkeddaClient>();
+        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SkeddaBookingResult("1"));
         var notification = new Mock<INotificationSender>();
+        notification.Setup(x => x.NotifyBookingSucceededAsync(It.IsAny<BookingUserConfig>(), It.IsAny<BookingSlot>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new TelegramNotificationResult(5, 10));
         var useCase = new ExecuteBookingUseCase(
             skedda.Object,
             notification.Object,
-            new InMemoryBookingDeduplicationStore());
+            new InMemoryBookingDeduplicationStore(),
+            Mock.Of<IBookingCancellationLinkRepository>(),
+            NullLogger<ExecuteBookingUseCase>.Instance);
         var booking = Prepared(BasicDomainConfig(), new BookingSlot(new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero)));
 
         await useCase.ExecuteAsync(booking, CancellationToken.None);
@@ -89,10 +96,20 @@ public class UnitTests
         await db.SaveChangesAsync();
 
         var skedda = new Mock<ISkeddaClient>();
+        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SkeddaBookingResult("1"));
+        var notification = new Mock<INotificationSender>();
+        notification.Setup(x => x.NotifyBookingSucceededAsync(It.IsAny<BookingUserConfig>(), It.IsAny<BookingSlot>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new TelegramNotificationResult(5, 10));
         var prepared = Prepared(ToDomain(entity), new BookingSlot(new DateTimeOffset(2030, 1, 1, entity.Hour, 0, 0, TimeSpan.Zero)));
         skedda.Setup(x => x.PrepareBookingAsync(It.IsAny<BookingUserConfig>(), It.IsAny<BookingSlot>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(prepared);
-        var execute = new ExecuteBookingUseCase(skedda.Object, Mock.Of<INotificationSender>(), new InMemoryBookingDeduplicationStore());
+        var execute = new ExecuteBookingUseCase(
+            skedda.Object,
+            notification.Object,
+            new InMemoryBookingDeduplicationStore(),
+            Mock.Of<IBookingCancellationLinkRepository>(),
+            NullLogger<ExecuteBookingUseCase>.Instance);
         var fallback = new BookingFallbackUseCase(new UserBookingConfigRepository(db), skedda.Object, execute);
 
         await fallback.ExecuteAsync(entity.Id, prepared.Slot.StartTime, CancellationToken.None);
@@ -107,7 +124,12 @@ public class UnitTests
         var fallback = new BookingFallbackUseCase(
             new UserBookingConfigRepository(db),
             Mock.Of<ISkeddaClient>(),
-            new ExecuteBookingUseCase(Mock.Of<ISkeddaClient>(), Mock.Of<INotificationSender>(), new InMemoryBookingDeduplicationStore()));
+            new ExecuteBookingUseCase(
+                Mock.Of<ISkeddaClient>(),
+                Mock.Of<INotificationSender>(),
+                new InMemoryBookingDeduplicationStore(),
+                Mock.Of<IBookingCancellationLinkRepository>(),
+                NullLogger<ExecuteBookingUseCase>.Instance));
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             fallback.ExecuteAsync(999, DateTimeOffset.UtcNow, CancellationToken.None));
@@ -123,7 +145,9 @@ public class UnitTests
             return "<html>no token</html>";
         });
 
-        var client = new SkeddaClient(Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = server.BaseUrl }));
+        var client = new SkeddaClient(
+            Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = server.BaseUrl }),
+            NullLogger<SkeddaClient>.Instance);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             client.PrepareBookingAsync(BasicDomainConfig(), new BookingSlot(DateTimeOffset.UtcNow), CancellationToken.None));
@@ -138,9 +162,11 @@ public class UnitTests
         {
             bookingPosts++;
             ctx.Response.StatusCode = 200;
-            return "{}";
+            return """{"booking":{"id":"1"}}""";
         });
-        var client = new SkeddaClient(Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = skedda.BaseUrl }));
+        var client = new SkeddaClient(
+            Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = skedda.BaseUrl }),
+            NullLogger<SkeddaClient>.Instance);
         var booking = Prepared(BasicDomainConfig(), new BookingSlot(DateTimeOffset.UtcNow));
 
         await client.BookAsync(booking, CancellationToken.None);
@@ -151,7 +177,16 @@ public class UnitTests
     [Fact]
     public async Task TelegramNotificationSender_Notify_Works_And_HandlesMissingConfig()
     {
-        var handler = new DelegateHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)));
+        var handler = new DelegateHandler((req, _) =>
+        {
+            var body = req.RequestUri!.AbsoluteUri.Contains("sendMessage", StringComparison.Ordinal)
+                ? """{"ok":true,"result":{"message_id":123}}"""
+                : "{}";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            });
+        });
 
         var sender = new TelegramNotificationSender(
             new HttpClient(handler),

@@ -53,8 +53,11 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<PreciseBookingSche
 builder.Services.AddSingleton<IClock, SystemClock>();
 builder.Services.AddSingleton<IBookingDeduplicationStore, InMemoryBookingDeduplicationStore>();
 builder.Services.AddScoped<IUserBookingConfigRepository, UserBookingConfigRepository>();
+builder.Services.AddScoped<IBookingCancellationLinkRepository, BookingCancellationLinkRepository>();
+builder.Services.AddScoped<ITelegramPollingStateRepository, TelegramPollingStateRepository>();
 builder.Services.AddScoped<ISkeddaClient, SkeddaClient>();
 builder.Services.AddScoped<INotificationSender, TelegramNotificationSender>();
+builder.Services.AddHostedService<TelegramLongPollingService>();
 builder.Services.AddScoped<IBookingScheduler, HangfireBookingScheduler>();
 builder.Services.AddScoped<PrepareBookingUseCase>();
 builder.Services.AddScoped<PrepareBookingForConfigUseCase>();

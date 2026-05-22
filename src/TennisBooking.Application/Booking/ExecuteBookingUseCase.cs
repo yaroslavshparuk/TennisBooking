@@ -1,4 +1,5 @@
 using TennisBooking.Application.Abstractions;
+using Microsoft.Extensions.Logging;
 
 namespace TennisBooking.Application.Booking;
 
@@ -7,34 +8,72 @@ public sealed class ExecuteBookingUseCase
     private readonly ISkeddaClient _skeddaClient;
     private readonly INotificationSender _notificationSender;
     private readonly IBookingDeduplicationStore _deduplicationStore;
+    private readonly IBookingCancellationLinkRepository _bookingCancellationLinkRepository;
+    private readonly ILogger<ExecuteBookingUseCase> _logger;
 
     public ExecuteBookingUseCase(
         ISkeddaClient skeddaClient,
         INotificationSender notificationSender,
-        IBookingDeduplicationStore deduplicationStore)
+        IBookingDeduplicationStore deduplicationStore,
+        IBookingCancellationLinkRepository bookingCancellationLinkRepository,
+        ILogger<ExecuteBookingUseCase> logger)
     {
         _skeddaClient = skeddaClient;
         _notificationSender = notificationSender;
         _deduplicationStore = deduplicationStore;
+        _bookingCancellationLinkRepository = bookingCancellationLinkRepository;
+        _logger = logger;
     }
 
     public async Task ExecuteAsync(PreparedBooking? booking, CancellationToken cancellationToken)
     {
         if (booking is null)
+        {
+            _logger.LogInformation("Execute booking called with null prepared booking");
             return;
+        }
 
         var bookingKey = BuildBookingKey(booking);
         if (!_deduplicationStore.TryBegin(bookingKey))
+        {
+            _logger.LogInformation("Skipping duplicate booking execution for key {BookingKey}", bookingKey);
             return;
+        }
 
         try
         {
-            await _skeddaClient.BookAsync(booking, cancellationToken);
-            await _notificationSender.NotifyBookingSucceededAsync(booking.UserConfig, booking.Slot, cancellationToken);
+            _logger.LogInformation(
+                "Executing booking for user {Username}, resource {ResourceId}, slot {SlotStart}",
+                booking.UserConfig.Username,
+                booking.UserConfig.ResourceId,
+                booking.Slot.StartTime);
+
+            var bookResult = await _skeddaClient.BookAsync(booking, cancellationToken);
+            _logger.LogInformation("Skedda booking created with id {SkeddaBookingId}", bookResult.BookingId);
+
+            var telegramResult = await _notificationSender.NotifyBookingSucceededAsync(booking.UserConfig, booking.Slot, cancellationToken);
+            _logger.LogInformation(
+                "Telegram success notification sent: chat {ChatId}, message {MessageId}",
+                telegramResult.ChatId,
+                telegramResult.MessageId);
+
+            await _bookingCancellationLinkRepository.SaveAsync(
+                booking.UserConfig,
+                booking.Slot,
+                telegramResult.ChatId,
+                telegramResult.MessageId,
+                bookResult.BookingId,
+                cancellationToken);
+            _logger.LogInformation(
+                "Stored cancellation link: chat {ChatId}, message {MessageId}, booking {SkeddaBookingId}",
+                telegramResult.ChatId,
+                telegramResult.MessageId,
+                bookResult.BookingId);
         }
-        catch
+        catch (Exception ex)
         {
             _deduplicationStore.Release(bookingKey);
+            _logger.LogError(ex, "Booking execution failed for key {BookingKey}; dedup key released", bookingKey);
             throw;
         }
     }
