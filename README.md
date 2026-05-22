@@ -48,6 +48,9 @@ Configure the following environment variables:
 - `Hangfire__DashboardPass` - Hangfire dashboard password
 - `Telegram__BotToken` - Telegram bot token
 - `Telegram__ChatId` - Telegram chat id
+- `Pyroscope__Enabled` - enable/disable profiling (`true`/`false`)
+- `Pyroscope__ServerAddress` - Pyroscope server URL (required when enabled)
+- `Pyroscope__ApplicationName` - profiler application label (optional, defaults to `TennisBooking`)
 
 For local development, you can use user secrets:
 ```bash
