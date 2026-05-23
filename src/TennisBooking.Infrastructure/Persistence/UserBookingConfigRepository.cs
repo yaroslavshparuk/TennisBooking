@@ -36,6 +36,22 @@ public sealed class UserBookingConfigRepository : IUserBookingConfigRepository
         return entity is null ? null : ToDomain(entity);
     }
 
+    public async Task<BookingUserConfig?> UpdateScheduleAsync(
+        int id,
+        DayOfWeek dayOfWeek,
+        int hour,
+        CancellationToken cancellationToken)
+    {
+        var entity = await _db.UserConfigs.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (entity is null)
+            return null;
+
+        entity.DayOfWeek = dayOfWeek;
+        entity.Hour = hour;
+        await _db.SaveChangesAsync(cancellationToken);
+        return ToDomain(entity);
+    }
+
     private static BookingUserConfig ToDomain(UserConfig entity)
         => new(
             entity.Id,

@@ -139,6 +139,45 @@ public class UnitTests
     }
 
     [Fact]
+    public async Task UpdateBookingSchedule_UpdatesDbAndReschedulesRecurringPreparation()
+    {
+        await using var db = NewInMemoryDb();
+        db.UserConfigs.Add(BasicEntityConfig());
+        await db.SaveChangesAsync();
+        var scheduler = new RecordingScheduler();
+        var useCase = new UpdateBookingScheduleUseCase(new UserBookingConfigRepository(db), scheduler);
+
+        var result = await useCase.ExecuteAsync(1, (int)DayOfWeek.Thursday, 18, CancellationToken.None);
+
+        Assert.Equal(UpdateBookingScheduleStatus.Updated, result.Status);
+        var entity = await db.UserConfigs.SingleAsync();
+        Assert.Equal(DayOfWeek.Thursday, entity.DayOfWeek);
+        Assert.Equal(18, entity.Hour);
+        Assert.NotNull(scheduler.RecurringUserConfig);
+        Assert.Equal(entity.Id, scheduler.RecurringUserConfig.Id);
+        Assert.Equal(DayOfWeek.Thursday, scheduler.RecurringUserConfig.DayOfWeek);
+        Assert.Equal(18, scheduler.RecurringUserConfig.Hour);
+    }
+
+    [Fact]
+    public async Task UpdateBookingSchedule_RejectsInvalidHour_WithoutDbUpdateOrReschedule()
+    {
+        await using var db = NewInMemoryDb();
+        db.UserConfigs.Add(BasicEntityConfig());
+        await db.SaveChangesAsync();
+        var scheduler = new RecordingScheduler();
+        var useCase = new UpdateBookingScheduleUseCase(new UserBookingConfigRepository(db), scheduler);
+
+        var result = await useCase.ExecuteAsync(1, (int)DayOfWeek.Thursday, 24, CancellationToken.None);
+
+        Assert.Equal(UpdateBookingScheduleStatus.Invalid, result.Status);
+        var entity = await db.UserConfigs.SingleAsync();
+        Assert.Equal(DayOfWeek.Monday, entity.DayOfWeek);
+        Assert.Equal(10, entity.Hour);
+        Assert.Null(scheduler.RecurringUserConfig);
+    }
+
+    [Fact]
     public async Task AttendanceReminder_SendsMessage_WhenThumbsUpCountIsLow()
     {
         var link = new BookingCancellationLink(
@@ -382,6 +421,7 @@ public class UnitTests
         public PreparedBooking? PreciseBooking { get; private set; }
         public int? FallbackUserConfigId { get; private set; }
         public DateTimeOffset? FallbackStartTime { get; private set; }
+        public BookingUserConfig? RecurringUserConfig { get; private set; }
 
         public void SchedulePreciseBooking(PreparedBooking booking) => PreciseBooking = booking;
 
@@ -393,7 +433,7 @@ public class UnitTests
 
         public void ScheduleAttendanceCheck(long chatId, int telegramMessageId, DateTimeOffset slotStartUtc, string reminderType, DateTimeOffset runAtUtc) { }
 
-        public void ScheduleRecurringPreparation(BookingUserConfig userConfig) { }
+        public void ScheduleRecurringPreparation(BookingUserConfig userConfig) => RecurringUserConfig = userConfig;
     }
 
     private sealed class NullServiceProvider : IServiceProvider

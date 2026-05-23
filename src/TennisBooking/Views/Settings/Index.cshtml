@@ -1,0 +1,257 @@
+@model SettingsIndexViewModel
+@{
+    Layout = null;
+}
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tennis Booking Settings</title>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <style>
+        :root {
+            --ink: #17211d;
+            --muted: #65736e;
+            --line: #d6ddd1;
+            --paper: #fffaf0;
+            --field: #fffdf7;
+            --accent: #1f7a4d;
+            --accent-strong: #105f39;
+            --danger: #a23b2a;
+            --danger-bg: #fff0ec;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            color: var(--ink);
+            font-family: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+            background:
+                radial-gradient(circle at 18% 12%, rgba(31, 122, 77, .18), transparent 30rem),
+                linear-gradient(135deg, #f4ead2 0%, #fffaf0 48%, #dfe9d8 100%);
+        }
+
+        main {
+            width: min(1080px, calc(100% - 32px));
+            margin: 0 auto;
+            padding: 56px 0;
+        }
+
+        .hero {
+            display: flex;
+            justify-content: space-between;
+            gap: 24px;
+            align-items: end;
+            margin-bottom: 28px;
+        }
+
+        h1 {
+            margin: 0 0 8px;
+            font-size: clamp(2.4rem, 7vw, 5.8rem);
+            line-height: .86;
+            letter-spacing: -.07em;
+            max-width: 680px;
+        }
+
+        .lede {
+            margin: 0;
+            color: var(--muted);
+            font-size: 1.08rem;
+            max-width: 560px;
+        }
+
+        .dashboard-link {
+            color: var(--accent-strong);
+            text-decoration: none;
+            border-bottom: 1px solid currentColor;
+            white-space: nowrap;
+            font-weight: 700;
+        }
+
+        .panel {
+            background: color-mix(in srgb, var(--paper) 86%, white);
+            border: 1px solid rgba(23, 33, 29, .16);
+            border-radius: 28px;
+            box-shadow: 0 24px 70px rgba(31, 45, 36, .14);
+            overflow: hidden;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 18px;
+            text-align: left;
+            vertical-align: middle;
+            border-bottom: 1px solid var(--line);
+        }
+
+        th {
+            color: var(--muted);
+            font-size: .78rem;
+            letter-spacing: .09em;
+            text-transform: uppercase;
+            font-family: ui-sans-serif, "Avenir Next", "Segoe UI", sans-serif;
+        }
+
+        tr:last-child td {
+            border-bottom: 0;
+        }
+
+        .identity {
+            font-size: 1.15rem;
+            font-weight: 700;
+        }
+
+        .meta {
+            color: var(--muted);
+            font-size: .92rem;
+            margin-top: 4px;
+        }
+
+        form {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        select, button {
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            background: var(--field);
+            color: var(--ink);
+            min-height: 42px;
+            padding: 0 14px;
+            font: 700 .95rem ui-sans-serif, "Avenir Next", "Segoe UI", sans-serif;
+        }
+
+        button {
+            background: var(--accent);
+            color: white;
+            border-color: var(--accent);
+            cursor: pointer;
+            transition: transform .14s ease, background .14s ease;
+        }
+
+        button:hover {
+            background: var(--accent-strong);
+            transform: translateY(-1px);
+        }
+
+        .status {
+            min-width: 170px;
+            color: var(--muted);
+            font-size: .95rem;
+        }
+
+        .status.ok {
+            color: var(--accent-strong);
+            font-weight: 700;
+        }
+
+        .status.error {
+            color: var(--danger);
+            background: var(--danger-bg);
+            border-radius: 14px;
+            padding: 10px 12px;
+        }
+
+        .empty {
+            padding: 42px;
+            color: var(--muted);
+        }
+
+        .htmx-request button {
+            opacity: .72;
+            cursor: progress;
+        }
+
+        @@media (max-width: 760px) {
+            main {
+                width: min(100% - 20px, 1080px);
+                padding: 28px 0;
+            }
+
+            .hero {
+                display: block;
+            }
+
+            .dashboard-link {
+                display: inline-block;
+                margin-top: 18px;
+            }
+
+            table, thead, tbody, tr, th, td {
+                display: block;
+            }
+
+            thead {
+                display: none;
+            }
+
+            tr {
+                padding: 18px;
+                border-bottom: 1px solid var(--line);
+            }
+
+            tr:last-child {
+                border-bottom: 0;
+            }
+
+            td {
+                padding: 8px 0;
+                border: 0;
+            }
+
+            .status {
+                min-width: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <section class="hero">
+        <div>
+            <h1>Booking schedule</h1>
+            <p class="lede">Change the weekly court time. Saving updates PostgreSQL and refreshes the Hangfire recurring job immediately.</p>
+        </div>
+        <a class="dashboard-link" href="/hangfire">Hangfire dashboard</a>
+    </section>
+
+    <section class="panel">
+        @if (Model.UserConfigs.Count == 0)
+        {
+            <div class="empty">No booking configurations found.</div>
+        }
+        else
+        {
+            <table>
+                <thead>
+                <tr>
+                    <th>User</th>
+                    <th>Venue</th>
+                    <th>Schedule</th>
+                    <th>Status</th>
+                </tr>
+                </thead>
+                <tbody>
+                @foreach (var config in Model.UserConfigs)
+                {
+                    <partial name="_UserConfigRow" model="config" />
+                }
+                </tbody>
+            </table>
+        }
+    </section>
+</main>
+</body>
+</html>

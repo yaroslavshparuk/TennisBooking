@@ -36,6 +36,7 @@
     </ItemGroup>
 
     <ItemGroup>
+      <ProjectReference Include="../TennisBooking.Domain/TennisBooking.Domain.csproj" />
       <ProjectReference Include="../TennisBooking.Infrastructure/TennisBooking.Infrastructure.csproj" />
       <ProjectReference Include="../TennisBooking.Application/TennisBooking.Application.csproj" />
     </ItemGroup>

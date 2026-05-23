@@ -1,0 +1,43 @@
+@model UserConfigScheduleViewModel
+
+<tr id="user-config-@Model.Id">
+    <td>
+        <div class="identity">@Model.Username</div>
+        <div class="meta">Resource @Model.ResourceId</div>
+    </td>
+    <td>
+        <div>@Model.Venue</div>
+        <div class="meta">@Model.VenueUser</div>
+    </td>
+    <td>
+        <form
+            method="post"
+            hx-post="/settings/user-configs/@Model.Id/schedule"
+            hx-target="closest tr"
+            hx-swap="outerHTML">
+            <select name="dayOfWeek" aria-label="Booking day">
+                @foreach (DayOfWeek day in Enum.GetValues<DayOfWeek>())
+                {
+                    <option value="@((int)day)" selected="@(Model.DayOfWeek == day)">@day</option>
+                }
+            </select>
+            <select name="hour" aria-label="Booking hour">
+                @for (var hour = 0; hour <= 23; hour++)
+                {
+                    <option value="@hour" selected="@(Model.Hour == hour)">@hour.ToString("00"):00</option>
+                }
+            </select>
+            <button type="submit">Save</button>
+        </form>
+    </td>
+    <td>
+        @if (!string.IsNullOrWhiteSpace(Model.Message))
+        {
+            <div class="status @(Model.IsError ? "error" : "ok")">@Model.Message</div>
+        }
+        else
+        {
+            <div class="status">Current: @Model.DayOfWeek @Model.Hour.ToString("00"):00</div>
+        }
+    </td>
+</tr>

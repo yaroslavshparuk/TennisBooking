@@ -66,8 +66,9 @@ builder.Services.AddScoped<PrepareBookingForConfigUseCase>();
 builder.Services.AddScoped<ExecuteBookingUseCase>();
 builder.Services.AddScoped<BookingFallbackUseCase>();
 builder.Services.AddScoped<AttendanceReminderUseCase>();
+builder.Services.AddScoped<UpdateBookingScheduleUseCase>();
 builder.Services.AddScoped<ScheduleBookingsUseCase>();
-builder.Services.AddControllers();
+builder.Services.AddControllersWithViews();
 builder.Services.AddHealthChecks()
     .AddCheck(
         "postgres",
@@ -135,6 +136,7 @@ using (var scope = app.Services.CreateScope())
     await db.Database.MigrateAsync();
 }
 
+app.UseStaticFiles();
 app.UseRouting();
 app.UseHangfireDashboard("/hangfire", new DashboardOptions
 {
@@ -144,6 +146,9 @@ app.UseHangfireDashboard("/hangfire", new DashboardOptions
     }
 });
 app.UseEndpoints(endpoints => {
+    endpoints.MapControllerRoute(
+        name: "default",
+        pattern: "{controller=Settings}/{action=Index}/{id?}");
     endpoints.MapControllers();
     endpoints.MapHangfireDashboard();
     endpoints.MapHealthChecks("/health", new HealthCheckOptions
