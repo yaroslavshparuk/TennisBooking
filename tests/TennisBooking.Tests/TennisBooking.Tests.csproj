@@ -4,6 +4,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <Exclude>[TennisBooking]*</Exclude>
     <ExcludeByFile>**/Program.cs,**/Migrations/*.cs,**/TennisBooking.Application/**/*.cs,**/TennisBooking.Infrastructure/**/*.cs</ExcludeByFile>
     <NuGetAudit>false</NuGetAudit>
     <DisableTransitiveProjectReferences>true</DisableTransitiveProjectReferences>
