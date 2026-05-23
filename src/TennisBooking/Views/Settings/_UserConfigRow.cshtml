@@ -1,43 +1,163 @@
 @model UserConfigScheduleViewModel
 
-<tr id="user-config-@Model.Id">
-    <td>
-        <div class="identity">@Model.Username</div>
-        <div class="meta">Resource @Model.ResourceId</div>
-    </td>
-    <td>
-        <div>@Model.Venue</div>
-        <div class="meta">@Model.VenueUser</div>
-    </td>
-    <td>
-        <form
-            method="post"
-            hx-post="/settings/user-configs/@Model.Id/schedule"
-            hx-target="closest tr"
-            hx-swap="outerHTML">
-            <select name="dayOfWeek" aria-label="Booking day">
-                @foreach (DayOfWeek day in Enum.GetValues<DayOfWeek>())
-                {
-                    <option value="@((int)day)" selected="@(Model.DayOfWeek == day)">@day</option>
-                }
-            </select>
-            <select name="hour" aria-label="Booking hour">
-                @for (var hour = 0; hour <= 23; hour++)
-                {
-                    <option value="@hour" selected="@(Model.Hour == hour)">@hour.ToString("00"):00</option>
-                }
-            </select>
-            <button type="submit">Save</button>
-        </form>
-    </td>
-    <td>
-        @if (!string.IsNullOrWhiteSpace(Model.Message))
-        {
-            <div class="status @(Model.IsError ? "error" : "ok")">@Model.Message</div>
+<article class="schedule-card" id="user-config-@Model.Id">
+    <style>
+        .schedule-card {
+            display: grid;
+            grid-template-columns: minmax(150px, 1fr) minmax(320px, 1.8fr) minmax(160px, .8fr);
+            gap: 18px;
+            align-items: center;
+            padding: 24px;
+            border-bottom: 1px solid var(--line);
+            background: linear-gradient(90deg, rgba(255,255,255,.035), transparent);
         }
-        else
-        {
-            <div class="status">Current: @Model.DayOfWeek @Model.Hour.ToString("00"):00</div>
+
+        .schedule-card:last-child {
+            border-bottom: 0;
         }
-    </td>
-</tr>
+
+        .identity {
+            min-width: 0;
+        }
+
+        .name {
+            margin: 0;
+            font-size: clamp(1.4rem, 4vw, 2.4rem);
+            line-height: .95;
+            letter-spacing: -.045em;
+        }
+
+        .current {
+            display: inline-flex;
+            margin-top: 10px;
+            color: var(--muted);
+            font: 800 .8rem ui-sans-serif, "Avenir Next", "Segoe UI", sans-serif;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+        }
+
+        form {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        select, button {
+            min-height: 46px;
+            border-radius: 999px;
+            border: 1px solid var(--field-border);
+            color: var(--ink);
+            background: var(--field);
+            padding: 0 15px;
+            font: 800 .95rem ui-sans-serif, "Avenir Next", "Segoe UI", sans-serif;
+            outline: none;
+        }
+
+        select {
+            min-width: 132px;
+        }
+
+        select:focus-visible, button:focus-visible {
+            border-color: var(--cyan);
+            box-shadow: 0 0 0 4px rgba(102, 227, 209, .16);
+        }
+
+        button {
+            color: var(--accent-ink);
+            background: linear-gradient(135deg, #ffe08a, var(--accent));
+            border-color: rgba(246, 200, 95, .72);
+            cursor: pointer;
+            transition: transform .14s ease, filter .14s ease;
+        }
+
+        button:hover {
+            transform: translateY(-1px);
+            filter: brightness(1.06);
+        }
+
+        .status {
+            justify-self: end;
+            color: var(--muted);
+            font-size: .98rem;
+        }
+
+        .status.ok {
+            color: var(--cyan);
+            font-weight: 800;
+        }
+
+        .status.error {
+            color: var(--danger);
+            background: var(--danger-bg);
+            border: 1px solid rgba(255, 154, 132, .24);
+            border-radius: 16px;
+            padding: 10px 12px;
+        }
+
+        .htmx-request button {
+            opacity: .72;
+            cursor: progress;
+        }
+
+        @@media (max-width: 760px) {
+            .schedule-card {
+                grid-template-columns: 1fr;
+                padding: 20px;
+            }
+
+            .status {
+                justify-self: start;
+            }
+        }
+    </style>
+
+    <div class="identity">
+        <h2 class="name">@Model.Username</h2>
+        <span class="current">@FormatDay(Model.DayOfWeek) @Model.Hour.ToString("00"):00</span>
+    </div>
+
+    <form
+        method="post"
+        hx-post="/settings/user-configs/@Model.Id/schedule"
+        hx-target="#user-config-@Model.Id"
+        hx-swap="outerHTML">
+        <select name="dayOfWeek" aria-label="День бронювання">
+            @foreach (DayOfWeek day in Enum.GetValues<DayOfWeek>())
+            {
+                <option value="@((int)day)" selected="@(Model.DayOfWeek == day)">@FormatDay(day)</option>
+            }
+        </select>
+        <select name="hour" aria-label="Година бронювання">
+            @for (var hour = 0; hour <= 23; hour++)
+            {
+                <option value="@hour" selected="@(Model.Hour == hour)">@hour.ToString("00"):00</option>
+            }
+        </select>
+        <button type="submit">Зберегти</button>
+    </form>
+
+    @if (!string.IsNullOrWhiteSpace(Model.Message))
+    {
+        <div class="status @(Model.IsError ? "error" : "ok")">@Model.Message</div>
+    }
+    else
+    {
+        <div class="status">Готово до зміни</div>
+    }
+</article>
+
+@functions {
+    private static string FormatDay(DayOfWeek day)
+        => day switch
+        {
+            DayOfWeek.Monday => "Понеділок",
+            DayOfWeek.Tuesday => "Вівторок",
+            DayOfWeek.Wednesday => "Середа",
+            DayOfWeek.Thursday => "Четвер",
+            DayOfWeek.Friday => "П'ятниця",
+            DayOfWeek.Saturday => "Субота",
+            DayOfWeek.Sunday => "Неділя",
+            _ => day.ToString()
+        };
+}

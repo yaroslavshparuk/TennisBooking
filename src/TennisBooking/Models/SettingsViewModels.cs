@@ -7,9 +7,6 @@ public sealed record SettingsIndexViewModel(IReadOnlyList<UserConfigScheduleView
 public sealed record UserConfigScheduleViewModel(
     int Id,
     string Username,
-    string ResourceId,
-    string Venue,
-    string VenueUser,
     DayOfWeek DayOfWeek,
     int Hour,
     string? Message = null,
@@ -22,9 +19,6 @@ public sealed record UserConfigScheduleViewModel(
         => new(
             config.Id,
             config.Username,
-            config.ResourceId,
-            config.Venue,
-            config.VenueUser,
             config.DayOfWeek,
             config.Hour,
             message,

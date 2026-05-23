@@ -23,10 +23,10 @@ public sealed class UpdateBookingScheduleUseCase
         CancellationToken cancellationToken)
     {
         if (!Enum.IsDefined(typeof(DayOfWeek), dayOfWeek))
-            return UpdateBookingScheduleResult.Invalid("Day of week must be between Sunday and Saturday.");
+            return UpdateBookingScheduleResult.Invalid("День тижня має бути від неділі до суботи.");
 
         if (hour is < 0 or > 23)
-            return UpdateBookingScheduleResult.Invalid("Hour must be between 00 and 23.");
+            return UpdateBookingScheduleResult.Invalid("Година має бути від 00 до 23.");
 
         var updated = await _userConfigs.UpdateScheduleAsync(userConfigId, (DayOfWeek)dayOfWeek, hour, cancellationToken);
         if (updated is null)
@@ -49,7 +49,7 @@ public sealed record UpdateBookingScheduleResult(
         => new(UpdateBookingScheduleStatus.Invalid, null, error);
 
     public static UpdateBookingScheduleResult NotFound()
-        => new(UpdateBookingScheduleStatus.NotFound, null, "Booking configuration was not found.");
+        => new(UpdateBookingScheduleStatus.NotFound, null, "Налаштування бронювання не знайдено.");
 }
 
 public enum UpdateBookingScheduleStatus

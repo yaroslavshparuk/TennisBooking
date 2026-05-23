@@ -40,7 +40,7 @@ public sealed class SettingsController : Controller
         {
             UpdateBookingScheduleStatus.Updated => UserConfigScheduleViewModel.FromDomain(
                 result.UserConfig!,
-                "Saved and rescheduled."),
+                "Збережено і перереєстровано."),
             UpdateBookingScheduleStatus.Invalid => await BuildErrorModelAsync(
                 id,
                 dayOfWeek,
@@ -49,10 +49,7 @@ public sealed class SettingsController : Controller
                 cancellationToken),
             _ => new UserConfigScheduleViewModel(
                 id,
-                "Unknown",
-                string.Empty,
-                string.Empty,
-                string.Empty,
+                "Невідомо",
                 DayOfWeek.Monday,
                 0,
                 result.Error,
@@ -74,10 +71,7 @@ public sealed class SettingsController : Controller
         {
             return new UserConfigScheduleViewModel(
                 id,
-                "Unknown",
-                string.Empty,
-                string.Empty,
-                string.Empty,
+                "Невідомо",
                 DayOfWeek.Monday,
                 0,
                 error,
