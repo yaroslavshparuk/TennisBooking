@@ -121,6 +121,7 @@ otelBuilder.WithMetrics(metrics =>
 });
 
 builder.Logging.ClearProviders();
+builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
 builder.Logging.AddConsole();
 builder.Logging.AddOpenTelemetry(logging =>
 {
