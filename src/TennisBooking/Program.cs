@@ -152,7 +152,6 @@ app.UseEndpoints(endpoints => {
         name: "default",
         pattern: "{controller=Settings}/{action=Index}/{id?}");
     endpoints.MapControllers();
-    endpoints.MapHangfireDashboard();
     endpoints.MapHealthChecks("/health", new HealthCheckOptions
     {
         Predicate = _ => false
