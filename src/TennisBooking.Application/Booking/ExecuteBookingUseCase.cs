@@ -60,6 +60,13 @@ public sealed class ExecuteBookingUseCase
                 telegramResult.ChatId,
                 telegramResult.MessageId);
 
+            if (telegramResult.ChatId == 0 || telegramResult.MessageId == 0)
+            {
+                _logger.LogWarning(
+                    "Skipping Telegram cancellation link and attendance reminders because no Telegram message was sent");
+                return;
+            }
+
             await _bookingCancellationLinkRepository.SaveAsync(
                 booking.UserConfig,
                 booking.Slot,

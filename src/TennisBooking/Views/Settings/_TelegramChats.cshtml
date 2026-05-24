@@ -1,0 +1,140 @@
+@model TelegramChatsViewModel
+
+<section class="panel telegram-panel" id="telegram-chats" aria-label="Telegram notifications">
+    <style>
+        .telegram-panel {
+            margin-top: 22px;
+            padding: 24px;
+        }
+
+        .telegram-header {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 14px 20px;
+            align-items: start;
+            margin-bottom: 18px;
+        }
+
+        .telegram-title {
+            margin: 0;
+            font-size: clamp(1.5rem, 4vw, 2.5rem);
+            line-height: 1;
+            letter-spacing: -.04em;
+        }
+
+        .telegram-form {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .telegram-form select, .telegram-form button {
+            min-height: 46px;
+            border-radius: 999px;
+            border: 1px solid var(--field-border);
+            color: var(--ink);
+            background: var(--field);
+            padding: 0 15px;
+            font: 800 .95rem ui-sans-serif, "Avenir Next", "Segoe UI", sans-serif;
+            outline: none;
+        }
+
+        .telegram-form select:focus-visible, .telegram-form button:focus-visible {
+            border-color: var(--cyan);
+            box-shadow: 0 0 0 4px rgba(102, 227, 209, .16);
+        }
+
+        .telegram-form button {
+            color: var(--accent-ink);
+            background: linear-gradient(135deg, #ffe08a, var(--accent));
+            border-color: rgba(246, 200, 95, .72);
+            cursor: pointer;
+            transition: transform .14s ease, filter .14s ease;
+        }
+
+        .telegram-form button:hover {
+            transform: translateY(-1px);
+            filter: brightness(1.06);
+        }
+
+        .telegram-select {
+            min-width: min(100%, 300px);
+        }
+
+        .telegram-chat-id {
+            color: var(--muted);
+            font: 800 .78rem ui-sans-serif, "Avenir Next", "Segoe UI", sans-serif;
+        }
+
+        .telegram-status {
+            justify-self: end;
+            color: var(--muted);
+            font-size: .98rem;
+            white-space: nowrap;
+        }
+
+        .telegram-status.ok {
+            color: var(--cyan);
+            font-weight: 800;
+        }
+
+        .telegram-status.error {
+            color: var(--danger);
+            background: var(--danger-bg);
+            border: 1px solid rgba(255, 154, 132, .24);
+            border-radius: 16px;
+            padding: 10px 12px;
+        }
+
+        @@media (max-width: 760px) {
+            .telegram-header {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+
+    <div class="telegram-header">
+        <div>
+            <h2 class="telegram-title">Telegram сповіщення</h2>
+            @{
+                var active = Model.Chats.FirstOrDefault(x => x.IsActive);
+            }
+            @if (active is not null)
+            {
+                <div class="telegram-chat-id">@active.Name · @active.ChatId</div>
+            }
+            else
+            {
+                <div class="telegram-chat-id">Активний чат не вибрано</div>
+            }
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(Model.Message))
+        {
+            <div class="telegram-status @(Model.IsError ? "error" : "ok")">@Model.Message</div>
+        }
+    </div>
+
+    @if (Model.Chats.Count == 0)
+    {
+        <div class="empty">Telegram chats не знайдено.</div>
+    }
+    else
+    {
+        <form
+            class="telegram-form"
+            method="post"
+            hx-post="/settings/telegram-chat"
+            hx-target="#telegram-chats"
+            hx-swap="outerHTML">
+            <select class="telegram-select" name="telegramChatId" aria-label="Telegram chat">
+                @foreach (var chat in Model.Chats)
+                {
+                    <option value="@chat.Id" selected="@chat.IsActive">@chat.Name (@chat.ChatId)</option>
+                }
+            </select>
+            <button type="submit">Зберегти</button>
+        </form>
+    }
+</section>

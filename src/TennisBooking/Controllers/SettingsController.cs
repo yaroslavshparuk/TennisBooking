@@ -10,13 +10,16 @@ namespace TennisBooking.Controllers;
 public sealed class SettingsController : Controller
 {
     private readonly IUserBookingConfigRepository _userConfigs;
+    private readonly ITelegramChatRepository _telegramChats;
     private readonly UpdateBookingScheduleUseCase _updateBookingSchedule;
 
     public SettingsController(
         IUserBookingConfigRepository userConfigs,
+        ITelegramChatRepository telegramChats,
         UpdateBookingScheduleUseCase updateBookingSchedule)
     {
         _userConfigs = userConfigs;
+        _telegramChats = telegramChats;
         _updateBookingSchedule = updateBookingSchedule;
     }
 
@@ -24,8 +27,24 @@ public sealed class SettingsController : Controller
     public async Task<IActionResult> Index(CancellationToken cancellationToken)
     {
         var configs = await _userConfigs.GetAllAsync(cancellationToken);
-        var model = new SettingsIndexViewModel(configs.Select(x => UserConfigScheduleViewModel.FromDomain(x)).ToList());
+        var chats = await BuildTelegramChatsModelAsync(null, false, cancellationToken);
+        var model = new SettingsIndexViewModel(
+            configs.Select(x => UserConfigScheduleViewModel.FromDomain(x)).ToList(),
+            chats);
         return View(model);
+    }
+
+    [HttpPost("telegram-chat")]
+    public async Task<IActionResult> UpdateTelegramChat(
+        [FromForm] int telegramChatId,
+        CancellationToken cancellationToken)
+    {
+        var updated = await _telegramChats.SetActiveAsync(telegramChatId, cancellationToken);
+        var model = updated is null
+            ? await BuildTelegramChatsModelAsync("Telegram chat не знайдено.", true, cancellationToken)
+            : await BuildTelegramChatsModelAsync("Telegram chat оновлено.", false, cancellationToken);
+
+        return PartialView("_TelegramChats", model);
     }
 
     [HttpPost("user-configs/{id:int}/schedule")]
@@ -90,5 +109,17 @@ public sealed class SettingsController : Controller
             current with { DayOfWeek = selectedDay, Hour = selectedHour },
             error,
             true);
+    }
+
+    private async Task<TelegramChatsViewModel> BuildTelegramChatsModelAsync(
+        string? message,
+        bool isError,
+        CancellationToken cancellationToken)
+    {
+        var chats = await _telegramChats.GetAllAsync(cancellationToken);
+        return new TelegramChatsViewModel(
+            chats.Select(TelegramChatOptionViewModel.FromDomain).ToList(),
+            message,
+            isError);
     }
 }

@@ -15,15 +15,18 @@ public sealed class TelegramNotificationSender : INotificationSender
 
     private readonly HttpClient _http;
     private readonly TelegramOptions _options;
+    private readonly ITelegramChatRepository _telegramChats;
     private readonly ILogger<TelegramNotificationSender> _logger;
 
     public TelegramNotificationSender(
         HttpClient http,
         IOptions<TelegramOptions> options,
+        ITelegramChatRepository telegramChats,
         ILogger<TelegramNotificationSender> logger)
     {
         _http = http;
         _options = options.Value;
+        _telegramChats = telegramChats;
         _logger = logger;
     }
 
@@ -48,7 +51,7 @@ public sealed class TelegramNotificationSender : INotificationSender
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to send Telegram notification");
-            return new TelegramNotificationResult(_options.ChatId, 0);
+            return new TelegramNotificationResult(0, 0);
         }
     }
 
@@ -97,10 +100,17 @@ public sealed class TelegramNotificationSender : INotificationSender
         CancellationToken cancellationToken,
         int? replyToMessageId = null)
     {
+        var chat = await _telegramChats.GetActiveAsync(cancellationToken);
+        if (chat is null)
+        {
+            _logger.LogWarning("Skipping Telegram message because no active Telegram chat is configured");
+            return new TelegramNotificationResult(0, 0);
+        }
+
         var url = $"{BaseUrlPrefix}{_options.BotToken}/sendMessage";
         var payload = new Dictionary<string, object?>
         {
-            ["chat_id"] = _options.ChatId,
+            ["chat_id"] = chat.ChatId,
             ["text"] = message
         };
         if (!string.IsNullOrWhiteSpace(parseMode))
@@ -125,6 +135,6 @@ public sealed class TelegramNotificationSender : INotificationSender
         var json = await resp.Content.ReadAsStringAsync(cancellationToken);
         using var doc = JsonDocument.Parse(json);
         var messageId = doc.RootElement.GetProperty("result").GetProperty("message_id").GetInt32();
-        return new TelegramNotificationResult(_options.ChatId, messageId);
+        return new TelegramNotificationResult(chat.ChatId, messageId);
     }
 }

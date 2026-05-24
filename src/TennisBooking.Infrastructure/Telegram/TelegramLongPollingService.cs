@@ -219,9 +219,18 @@ public sealed class TelegramLongPollingService : BackgroundService
     private async Task ProcessUpdateAsync(TelegramUpdate update, CancellationToken cancellationToken)
     {
         var message = update.Message;
-        if (message?.Chat?.Id != _options.ChatId || string.IsNullOrWhiteSpace(message.Text))
+        if (message?.Chat is null || string.IsNullOrWhiteSpace(message.Text))
         {
-            _logger.LogDebug("Ignoring Telegram update {UpdateId}: no text or unexpected chat", update.UpdateId);
+            _logger.LogDebug("Ignoring Telegram update {UpdateId}: no chat or text", update.UpdateId);
+            return;
+        }
+
+        using var scope = _scopeFactory.CreateScope();
+        var telegramChats = scope.ServiceProvider.GetRequiredService<ITelegramChatRepository>();
+        var activeChat = await telegramChats.GetActiveAsync(cancellationToken);
+        if (activeChat is null || message.Chat.Id != activeChat.ChatId)
+        {
+            _logger.LogDebug("Ignoring Telegram update {UpdateId}: unexpected chat", update.UpdateId);
             return;
         }
 
@@ -237,7 +246,6 @@ public sealed class TelegramLongPollingService : BackgroundService
             message.MessageId,
             message.ReplyToMessage?.MessageId);
 
-        using var scope = _scopeFactory.CreateScope();
         var links = scope.ServiceProvider.GetRequiredService<IBookingCancellationLinkRepository>();
         var notification = scope.ServiceProvider.GetRequiredService<INotificationSender>();
         var skedda = scope.ServiceProvider.GetRequiredService<ISkeddaClient>();

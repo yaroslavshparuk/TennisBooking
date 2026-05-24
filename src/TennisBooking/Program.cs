@@ -57,6 +57,7 @@ builder.Services.AddSingleton<IBookingDeduplicationStore, InMemoryBookingDedupli
 builder.Services.AddScoped<IUserBookingConfigRepository, UserBookingConfigRepository>();
 builder.Services.AddScoped<IBookingCancellationLinkRepository, BookingCancellationLinkRepository>();
 builder.Services.AddScoped<ITelegramPollingStateRepository, TelegramPollingStateRepository>();
+builder.Services.AddScoped<ITelegramChatRepository, TelegramChatRepository>();
 builder.Services.AddScoped<ISkeddaClient, SkeddaClient>();
 builder.Services.AddScoped<INotificationSender, TelegramNotificationSender>();
 builder.Services.AddHostedService<TelegramLongPollingService>();

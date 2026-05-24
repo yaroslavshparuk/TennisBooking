@@ -11,6 +11,7 @@ public class ApplicationDbContext : DbContext
     public DbSet<UserConfig> UserConfigs { get; set; }
     public DbSet<BookingCancellationLinkEntity> BookingCancellationLinks { get; set; }
     public DbSet<TelegramPollingStateEntity> TelegramPollingStates { get; set; }
+    public DbSet<TelegramChatEntity> TelegramChats { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -18,5 +19,12 @@ public class ApplicationDbContext : DbContext
         modelBuilder.Entity<BookingCancellationLinkEntity>()
             .HasIndex(x => new { x.ChatId, x.TelegramMessageId })
             .IsUnique();
+        modelBuilder.Entity<TelegramChatEntity>()
+            .HasIndex(x => x.ChatId)
+            .IsUnique();
+        modelBuilder.Entity<TelegramChatEntity>()
+            .HasIndex(x => x.IsActive)
+            .IsUnique()
+            .HasFilter("\"IsActive\" = true");
     }
 }

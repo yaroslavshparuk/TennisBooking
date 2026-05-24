@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Hangfire;
 using Hangfire.Dashboard;
 using Microsoft.AspNetCore.Http;
@@ -86,6 +87,47 @@ public class UnitTests
 
         skedda.Verify(x => x.BookAsync(booking, It.IsAny<CancellationToken>()), Times.Once);
         notification.Verify(x => x.NotifyBookingSucceededAsync(booking.UserConfig, booking.Slot, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ExecuteBooking_SkipsTelegramFollowUps_WhenNotificationWasNotSent()
+    {
+        var skedda = new Mock<ISkeddaClient>();
+        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SkeddaBookingResult("1"));
+        var notification = new Mock<INotificationSender>();
+        notification.Setup(x => x.NotifyBookingSucceededAsync(It.IsAny<BookingUserConfig>(), It.IsAny<BookingSlot>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new TelegramNotificationResult(0, 0));
+        var links = new Mock<IBookingCancellationLinkRepository>();
+        var scheduler = new Mock<IBookingScheduler>();
+        var useCase = new ExecuteBookingUseCase(
+            skedda.Object,
+            notification.Object,
+            new InMemoryBookingDeduplicationStore(),
+            links.Object,
+            scheduler.Object,
+            NullLogger<ExecuteBookingUseCase>.Instance);
+        var booking = Prepared(BasicDomainConfig(), new BookingSlot(new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero)));
+
+        await useCase.ExecuteAsync(booking, TestContext.Current.CancellationToken);
+
+        links.Verify(
+            x => x.SaveAsync(
+                It.IsAny<BookingUserConfig>(),
+                It.IsAny<BookingSlot>(),
+                It.IsAny<long>(),
+                It.IsAny<int>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+        scheduler.Verify(
+            x => x.ScheduleAttendanceCheck(
+                It.IsAny<long>(),
+                It.IsAny<int>(),
+                It.IsAny<DateTimeOffset>(),
+                It.IsAny<string>(),
+                It.IsAny<DateTimeOffset>()),
+            Times.Never);
     }
 
     [Fact]
@@ -276,6 +318,11 @@ public class UnitTests
     [Fact]
     public async Task TelegramNotificationSender_Notify_Works_And_HandlesMissingConfig()
     {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var db = NewInMemoryDb();
+        db.TelegramChats.Add(new TelegramChatEntity { Name = "Main", ChatId = 5, IsActive = true });
+        await db.SaveChangesAsync(cancellationToken);
+
         var handler = new DelegateHandler((req, _) =>
         {
             var body = req.RequestUri!.AbsoluteUri.Contains("sendMessage", StringComparison.Ordinal)
@@ -289,9 +336,66 @@ public class UnitTests
 
         var sender = new TelegramNotificationSender(
             new HttpClient(handler),
-            Microsoft.Extensions.Options.Options.Create(new TelegramOptions { BotToken = "x", ChatId = 5 }),
+            Microsoft.Extensions.Options.Options.Create(new TelegramOptions { BotToken = "x" }),
+            new TelegramChatRepository(db),
             NullLogger<TelegramNotificationSender>.Instance);
-        await sender.NotifyBookingSucceededAsync(BasicDomainConfig(), new BookingSlot(DateTimeOffset.UtcNow), CancellationToken.None);
+        await sender.NotifyBookingSucceededAsync(BasicDomainConfig(), new BookingSlot(DateTimeOffset.UtcNow), cancellationToken);
+    }
+
+    [Fact]
+    public async Task TelegramNotificationSender_UsesCurrentActiveChat()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var db = NewInMemoryDb();
+        db.TelegramChats.AddRange(
+            new TelegramChatEntity { Name = "Old", ChatId = 5, IsActive = true },
+            new TelegramChatEntity { Name = "New", ChatId = 9, IsActive = false });
+        await db.SaveChangesAsync(cancellationToken);
+
+        var chatIds = new List<long>();
+        var handler = new DelegateHandler(async (req, ct) =>
+        {
+            var json = await req.Content!.ReadAsStringAsync(ct);
+            using var doc = JsonDocument.Parse(json);
+            chatIds.Add(doc.RootElement.GetProperty("chat_id").GetInt64());
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"ok":true,"result":{"message_id":123}}""", Encoding.UTF8, "application/json")
+            };
+        });
+
+        var repository = new TelegramChatRepository(db);
+        var sender = new TelegramNotificationSender(
+            new HttpClient(handler),
+            Microsoft.Extensions.Options.Options.Create(new TelegramOptions { BotToken = "x" }),
+            repository,
+            NullLogger<TelegramNotificationSender>.Instance);
+
+        await sender.NotifyBookingSucceededAsync(BasicDomainConfig(), new BookingSlot(DateTimeOffset.UtcNow), cancellationToken);
+        await repository.SetActiveAsync(2, cancellationToken);
+        await sender.NotifyBookingSucceededAsync(BasicDomainConfig(), new BookingSlot(DateTimeOffset.UtcNow), cancellationToken);
+
+        Assert.Equal(new long[] { 5, 9 }, chatIds);
+    }
+
+    [Fact]
+    public async Task TelegramChatRepository_SetActive_SwitchesActiveChat()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var db = NewInMemoryDb();
+        db.TelegramChats.AddRange(
+            new TelegramChatEntity { Name = "Old", ChatId = 5, IsActive = true },
+            new TelegramChatEntity { Name = "New", ChatId = 9, IsActive = false });
+        await db.SaveChangesAsync(cancellationToken);
+
+        var repository = new TelegramChatRepository(db);
+
+        var selected = await repository.SetActiveAsync(2, cancellationToken);
+        var chats = await repository.GetAllAsync(cancellationToken);
+
+        Assert.NotNull(selected);
+        Assert.Equal(9, selected.ChatId);
+        Assert.Equal(9, Assert.Single(chats, x => x.IsActive).ChatId);
     }
 
     [Fact]

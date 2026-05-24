@@ -114,6 +114,36 @@ namespace TennisBooking.Migrations
                     b.ToTable("TelegramPollingStates");
                 });
 
+            modelBuilder.Entity("TennisBooking.DAL.Models.TelegramChatEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<long>("ChatId")
+                        .HasColumnType("bigint");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ChatId")
+                        .IsUnique();
+
+                    b.HasIndex("IsActive")
+                        .IsUnique()
+                        .HasFilter("\"IsActive\" = true");
+
+                    b.ToTable("TelegramChats");
+                });
+
             modelBuilder.Entity("TennisBooking.DAL.Models.UserConfig", b =>
                 {
                     b.Property<int>("Id")
