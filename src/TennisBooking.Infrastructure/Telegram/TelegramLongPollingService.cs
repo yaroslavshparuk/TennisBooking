@@ -246,9 +246,8 @@ public sealed class TelegramLongPollingService : BackgroundService
             message.MessageId,
             message.ReplyToMessage?.MessageId);
 
-        var links = scope.ServiceProvider.GetRequiredService<IBookingCancellationLinkRepository>();
         var notification = scope.ServiceProvider.GetRequiredService<INotificationSender>();
-        var skedda = scope.ServiceProvider.GetRequiredService<ISkeddaClient>();
+        var cancelBooking = scope.ServiceProvider.GetRequiredService<CancelBookingUseCase>();
 
         var repliedMessageId = message.ReplyToMessage?.MessageId;
         if (!repliedMessageId.HasValue)
@@ -258,8 +257,12 @@ public sealed class TelegramLongPollingService : BackgroundService
             return;
         }
 
-        var link = await links.GetByReplyAsync(message.Chat.Id, repliedMessageId.Value, cancellationToken);
-        if (link is null)
+        var status = await cancelBooking.ExecuteAsync(
+            message.Chat.Id,
+            repliedMessageId.Value,
+            message.MessageId,
+            cancellationToken);
+        if (status == CancelBookingStatus.NotFound)
         {
             _logger.LogInformation(
                 "Rejecting /cancel message {MessageId}: no booking link for replied message {RepliedMessageId}",
@@ -269,34 +272,15 @@ public sealed class TelegramLongPollingService : BackgroundService
             return;
         }
 
-        if (link.CancelledAtUtc.HasValue)
+        if (status == CancelBookingStatus.AlreadyCancelled)
         {
             _logger.LogInformation(
-                "Skipping /cancel for booking {SkeddaBookingId}: already cancelled",
-                link.SkeddaBookingId);
+                "Skipping /cancel message {MessageId}: booking already cancelled",
+                message.MessageId);
             await notification.NotifyMessageAsync("Це бронювання вже скасовано.", cancellationToken, repliedMessageId.Value);
             return;
         }
 
-        var prepared = new PreparedBooking(
-            link.UserConfig,
-            link.Slot,
-            new { },
-            string.Empty,
-            string.Empty,
-            string.Empty);
-        await skedda.CancelAsync(prepared, link.SkeddaBookingId, cancellationToken);
-        var marked = await links.TryMarkCancelledAsync(message.Chat.Id, repliedMessageId.Value, message.MessageId, cancellationToken);
-        if (!marked)
-        {
-            _logger.LogInformation(
-                "Cancellation race detected for booking {SkeddaBookingId}: already cancelled by another request",
-                link.SkeddaBookingId);
-            await notification.NotifyMessageAsync("Це бронювання вже скасовано.", cancellationToken, repliedMessageId.Value);
-            return;
-        }
-
-        _logger.LogInformation("Cancellation completed for booking {SkeddaBookingId}", link.SkeddaBookingId);
         await notification.NotifyMessageAsync("Бронювання скасовано.", cancellationToken, repliedMessageId.Value);
     }
 

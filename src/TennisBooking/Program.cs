@@ -67,6 +67,7 @@ builder.Services.AddScoped<PrepareBookingForConfigUseCase>();
 builder.Services.AddScoped<ExecuteBookingUseCase>();
 builder.Services.AddScoped<BookingFallbackUseCase>();
 builder.Services.AddScoped<AttendanceReminderUseCase>();
+builder.Services.AddScoped<CancelBookingUseCase>();
 builder.Services.AddScoped<UpdateBookingScheduleUseCase>();
 builder.Services.AddScoped<ScheduleBookingsUseCase>();
 builder.Services.AddControllersWithViews();

@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using TennisBooking.DAL;
@@ -11,9 +12,11 @@ using TennisBooking.DAL;
 namespace TennisBooking.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260525081337_AddAttendanceReminderJobIds")]
+    partial class AddAttendanceReminderJobIds
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -30,9 +33,6 @@ namespace TennisBooking.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
 
-                    b.Property<int?>("CancelRequestMessageId")
-                        .HasColumnType("integer");
-
                     b.Property<DateTimeOffset?>("AttendanceReminder24hSentAtUtc")
                         .HasColumnType("timestamp with time zone");
 
@@ -44,6 +44,9 @@ namespace TennisBooking.Migrations
 
                     b.Property<string>("AttendanceReminder2hJobId")
                         .HasColumnType("text");
+
+                    b.Property<int?>("CancelRequestMessageId")
+                        .HasColumnType("integer");
 
                     b.Property<DateTimeOffset?>("CancelledAtUtc")
                         .HasColumnType("timestamp with time zone");
@@ -104,22 +107,6 @@ namespace TennisBooking.Migrations
                     b.ToTable("BookingCancellationLinks");
                 });
 
-            modelBuilder.Entity("TennisBooking.DAL.Models.TelegramPollingStateEntity", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<long>("LastProcessedUpdateId")
-                        .HasColumnType("bigint");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("TelegramPollingStates");
-                });
-
             modelBuilder.Entity("TennisBooking.DAL.Models.TelegramChatEntity", b =>
                 {
                     b.Property<int>("Id")
@@ -148,6 +135,22 @@ namespace TennisBooking.Migrations
                         .HasFilter("\"IsActive\" = true");
 
                     b.ToTable("TelegramChats");
+                });
+
+            modelBuilder.Entity("TennisBooking.DAL.Models.TelegramPollingStateEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<long>("LastProcessedUpdateId")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("TelegramPollingStates");
                 });
 
             modelBuilder.Entity("TennisBooking.DAL.Models.UserConfig", b =>

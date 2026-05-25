@@ -82,18 +82,35 @@ public sealed class ExecuteBookingUseCase
 
             var reminder24hAt = booking.Slot.StartTime.ToUniversalTime().AddHours(-24);
             var reminder2hAt = booking.Slot.StartTime.ToUniversalTime().AddHours(-2);
-            _bookingScheduler.ScheduleAttendanceCheck(
+            var reminder24hJobId = _bookingScheduler.ScheduleAttendanceCheck(
                 telegramResult.ChatId,
                 telegramResult.MessageId,
                 booking.Slot.StartTime.ToUniversalTime(),
                 AttendanceReminderUseCase.ReminderType24h,
                 reminder24hAt);
-            _bookingScheduler.ScheduleAttendanceCheck(
+            var activeAfter24hSchedule = await _bookingCancellationLinkRepository.SaveReminderJobIdAsync(
+                telegramResult.ChatId,
+                telegramResult.MessageId,
+                AttendanceReminderUseCase.ReminderType24h,
+                reminder24hJobId,
+                cancellationToken);
+            if (!activeAfter24hSchedule)
+                _bookingScheduler.DeleteAttendanceCheck(reminder24hJobId);
+
+            var reminder2hJobId = _bookingScheduler.ScheduleAttendanceCheck(
                 telegramResult.ChatId,
                 telegramResult.MessageId,
                 booking.Slot.StartTime.ToUniversalTime(),
                 AttendanceReminderUseCase.ReminderType2h,
                 reminder2hAt);
+            var activeAfter2hSchedule = await _bookingCancellationLinkRepository.SaveReminderJobIdAsync(
+                telegramResult.ChatId,
+                telegramResult.MessageId,
+                AttendanceReminderUseCase.ReminderType2h,
+                reminder2hJobId,
+                cancellationToken);
+            if (!activeAfter2hSchedule)
+                _bookingScheduler.DeleteAttendanceCheck(reminder2hJobId);
         }
         catch (Exception ex)
         {

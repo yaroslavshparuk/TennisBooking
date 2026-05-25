@@ -161,6 +161,55 @@ public sealed class BookingPostgresIntegrationTests
         Assert.Equal(1, bookingPosts);
     }
 
+    [DockerFact]
+    public async Task CancelBooking_DeletesPersistedAttendanceReminderJobsFromHangfire()
+    {
+        await using var postgres = await StartPostgresAsync();
+        var connectionString = postgres.GetConnectionString();
+
+        await using var db = await CreateMigratedDbAsync(connectionString);
+        var storage = new PostgreSqlStorage(connectionString, _ => { }, new PostgreSqlStorageOptions
+        {
+            SchemaName = "hangfire",
+            QueuePollInterval = TimeSpan.FromSeconds(1)
+        });
+        var scheduler = new HangfireBookingScheduler(new BackgroundJobClient(storage), Mock.Of<IPreciseBookingScheduler>());
+        var skedda = new Mock<ISkeddaClient>();
+        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SkeddaBookingResult("skedda-1"));
+        var notification = new Mock<INotificationSender>();
+        notification.Setup(x => x.NotifyBookingSucceededAsync(It.IsAny<BookingUserConfig>(), It.IsAny<BookingSlot>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new TelegramNotificationResult(5, 10));
+        var links = new BookingCancellationLinkRepository(db, NullLogger<BookingCancellationLinkRepository>.Instance);
+        var execute = new ExecuteBookingUseCase(
+            skedda.Object,
+            notification.Object,
+            new InMemoryBookingDeduplicationStore(),
+            links,
+            scheduler,
+            NullLogger<ExecuteBookingUseCase>.Instance);
+        var slot = new BookingSlot(new DateTimeOffset(2030, 1, 1, 10, 0, 0, TimeSpan.Zero));
+
+        await execute.ExecuteAsync(new PreparedBooking(
+            ToDomain(NewConfig("reminder-cancel")),
+            slot,
+            new { },
+            "token",
+            "csrf",
+            "app"), CancellationToken.None);
+
+        var link = await links.GetByMessageAsync(5, 10, CancellationToken.None);
+        Assert.NotNull(link);
+        Assert.NotNull(link.AttendanceReminder24hJobId);
+        Assert.NotNull(link.AttendanceReminder2hJobId);
+
+        var cancel = new CancelBookingUseCase(links, skedda.Object, scheduler, NullLogger<CancelBookingUseCase>.Instance);
+        Assert.Equal(CancelBookingStatus.Cancelled, await cancel.ExecuteAsync(5, 10, 11, CancellationToken.None));
+
+        Assert.Equal("Deleted", await ReadLatestHangfireStateNameAsync(connectionString, link.AttendanceReminder24hJobId!));
+        Assert.Equal("Deleted", await ReadLatestHangfireStateNameAsync(connectionString, link.AttendanceReminder2hJobId!));
+    }
+
     private static async Task<PostgreSqlContainer> StartPostgresAsync()
     {
         var postgres = new PostgreSqlBuilder()
@@ -241,6 +290,23 @@ public sealed class BookingPostgresIntegrationTests
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync(), "Expected Hangfire to persist one scheduled job.");
         return (reader.GetString(0), reader.GetString(1), reader.GetString(2));
+    }
+
+    private static async Task<string> ReadLatestHangfireStateNameAsync(string connectionString, string jobId)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+
+        await using var command = new NpgsqlCommand("""
+            select s.name
+            from hangfire.state s
+            where s.jobid = @jobId
+            order by s.id desc
+            limit 1;
+            """, connection);
+        command.Parameters.AddWithValue("jobId", long.Parse(jobId));
+        var stateName = await command.ExecuteScalarAsync();
+        return Assert.IsType<string>(stateName);
     }
 
     private sealed class FixedClock : IClock

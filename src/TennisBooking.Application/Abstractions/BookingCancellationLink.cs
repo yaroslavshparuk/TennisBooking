@@ -11,4 +11,6 @@ public sealed record BookingCancellationLink(
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset? CancelledAtUtc,
     DateTimeOffset? AttendanceReminder24hSentAtUtc,
-    DateTimeOffset? AttendanceReminder2hSentAtUtc);
+    DateTimeOffset? AttendanceReminder2hSentAtUtc,
+    string? AttendanceReminder24hJobId = null,
+    string? AttendanceReminder2hJobId = null);

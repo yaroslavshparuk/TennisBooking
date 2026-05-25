@@ -131,6 +131,72 @@ public class UnitTests
     }
 
     [Fact]
+    public async Task ExecuteBooking_PersistsScheduledReminderJobIds()
+    {
+        var skedda = new Mock<ISkeddaClient>();
+        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SkeddaBookingResult("1"));
+        var notification = new Mock<INotificationSender>();
+        notification.Setup(x => x.NotifyBookingSucceededAsync(It.IsAny<BookingUserConfig>(), It.IsAny<BookingSlot>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new TelegramNotificationResult(5, 10));
+        var links = new Mock<IBookingCancellationLinkRepository>();
+        links.Setup(x => x.SaveReminderJobIdAsync(5, 10, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var scheduler = new Mock<IBookingScheduler>();
+        scheduler.Setup(x => x.ScheduleAttendanceCheck(5, 10, It.IsAny<DateTimeOffset>(), AttendanceReminderUseCase.ReminderType24h, It.IsAny<DateTimeOffset>()))
+            .Returns("job-24h");
+        scheduler.Setup(x => x.ScheduleAttendanceCheck(5, 10, It.IsAny<DateTimeOffset>(), AttendanceReminderUseCase.ReminderType2h, It.IsAny<DateTimeOffset>()))
+            .Returns("job-2h");
+        var useCase = new ExecuteBookingUseCase(
+            skedda.Object,
+            notification.Object,
+            new InMemoryBookingDeduplicationStore(),
+            links.Object,
+            scheduler.Object,
+            NullLogger<ExecuteBookingUseCase>.Instance);
+
+        await useCase.ExecuteAsync(
+            Prepared(BasicDomainConfig(), new BookingSlot(new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero))),
+            CancellationToken.None);
+
+        links.Verify(x => x.SaveReminderJobIdAsync(5, 10, AttendanceReminderUseCase.ReminderType24h, "job-24h", It.IsAny<CancellationToken>()), Times.Once);
+        links.Verify(x => x.SaveReminderJobIdAsync(5, 10, AttendanceReminderUseCase.ReminderType2h, "job-2h", It.IsAny<CancellationToken>()), Times.Once);
+        scheduler.Verify(x => x.DeleteAttendanceCheck(It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteBooking_DeletesReminderScheduledAfterCancellation()
+    {
+        var skedda = new Mock<ISkeddaClient>();
+        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SkeddaBookingResult("1"));
+        var notification = new Mock<INotificationSender>();
+        notification.Setup(x => x.NotifyBookingSucceededAsync(It.IsAny<BookingUserConfig>(), It.IsAny<BookingSlot>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new TelegramNotificationResult(5, 10));
+        var links = new Mock<IBookingCancellationLinkRepository>();
+        links.Setup(x => x.SaveReminderJobIdAsync(5, 10, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        var scheduler = new Mock<IBookingScheduler>();
+        scheduler.SetupSequence(x => x.ScheduleAttendanceCheck(5, 10, It.IsAny<DateTimeOffset>(), It.IsAny<string>(), It.IsAny<DateTimeOffset>()))
+            .Returns("job-24h")
+            .Returns("job-2h");
+        var useCase = new ExecuteBookingUseCase(
+            skedda.Object,
+            notification.Object,
+            new InMemoryBookingDeduplicationStore(),
+            links.Object,
+            scheduler.Object,
+            NullLogger<ExecuteBookingUseCase>.Instance);
+
+        await useCase.ExecuteAsync(
+            Prepared(BasicDomainConfig(), new BookingSlot(new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero))),
+            CancellationToken.None);
+
+        scheduler.Verify(x => x.DeleteAttendanceCheck("job-24h"), Times.Once);
+        scheduler.Verify(x => x.DeleteAttendanceCheck("job-2h"), Times.Once);
+    }
+
+    [Fact]
     public async Task BookingFallback_LoadsConfigAndBooks()
     {
         await using var db = NewInMemoryDb();
@@ -274,6 +340,66 @@ public class UnitTests
         await useCase.ExecuteAsync(5, 10, AttendanceReminderUseCase.ReminderType2h, CancellationToken.None);
 
         notification.Verify(x => x.NotifyMessageAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<int?>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CancelBooking_CancelsSkeddaAndDeletesStoredReminderJobs()
+    {
+        var active = BookingLink(null, "job-24h", "job-2h");
+        var cancelled = BookingLink(DateTimeOffset.UtcNow, "job-24h", "job-2h");
+        var links = new Mock<IBookingCancellationLinkRepository>();
+        links.SetupSequence(x => x.GetByReplyAsync(5, 10, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(active)
+            .ReturnsAsync(cancelled);
+        links.Setup(x => x.TryMarkCancelledAsync(5, 10, 11, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var skedda = new Mock<ISkeddaClient>();
+        var scheduler = new Mock<IBookingScheduler>();
+        var useCase = new CancelBookingUseCase(links.Object, skedda.Object, scheduler.Object, NullLogger<CancelBookingUseCase>.Instance);
+
+        var status = await useCase.ExecuteAsync(5, 10, 11, CancellationToken.None);
+
+        Assert.Equal(CancelBookingStatus.Cancelled, status);
+        skedda.Verify(x => x.CancelAsync(It.IsAny<PreparedBooking>(), "skedda-1", It.IsAny<CancellationToken>()), Times.Once);
+        scheduler.Verify(x => x.DeleteAttendanceCheck("job-24h"), Times.Once);
+        scheduler.Verify(x => x.DeleteAttendanceCheck("job-2h"), Times.Once);
+    }
+
+    [Fact]
+    public async Task CancelBooking_RetriesReminderDeletion_WhenAlreadyCancelled()
+    {
+        var links = new Mock<IBookingCancellationLinkRepository>();
+        links.Setup(x => x.GetByReplyAsync(5, 10, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(BookingLink(DateTimeOffset.UtcNow, "job-24h", "job-2h"));
+        var skedda = new Mock<ISkeddaClient>();
+        var scheduler = new Mock<IBookingScheduler>();
+        var useCase = new CancelBookingUseCase(links.Object, skedda.Object, scheduler.Object, NullLogger<CancelBookingUseCase>.Instance);
+
+        var status = await useCase.ExecuteAsync(5, 10, 11, CancellationToken.None);
+
+        Assert.Equal(CancelBookingStatus.AlreadyCancelled, status);
+        skedda.Verify(x => x.CancelAsync(It.IsAny<PreparedBooking>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        scheduler.Verify(x => x.DeleteAttendanceCheck("job-24h"), Times.Once);
+        scheduler.Verify(x => x.DeleteAttendanceCheck("job-2h"), Times.Once);
+    }
+
+    [Fact]
+    public async Task CancelBooking_HandlesLegacyCancelledLinkWithoutStoredReminderJobs()
+    {
+        var links = new Mock<IBookingCancellationLinkRepository>();
+        links.Setup(x => x.GetByReplyAsync(5, 10, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(BookingLink(DateTimeOffset.UtcNow, null, null));
+        var scheduler = new Mock<IBookingScheduler>();
+        var useCase = new CancelBookingUseCase(
+            links.Object,
+            Mock.Of<ISkeddaClient>(),
+            scheduler.Object,
+            NullLogger<CancelBookingUseCase>.Instance);
+
+        var status = await useCase.ExecuteAsync(5, 10, 11, CancellationToken.None);
+
+        Assert.Equal(CancelBookingStatus.AlreadyCancelled, status);
+        scheduler.Verify(x => x.DeleteAttendanceCheck(It.IsAny<string>()), Times.Never);
     }
 
     [Fact]
@@ -507,6 +633,22 @@ public class UnitTests
         "csrf",
         "app");
 
+    private static BookingCancellationLink BookingLink(
+        DateTimeOffset? cancelledAtUtc,
+        string? reminder24hJobId,
+        string? reminder2hJobId) => new(
+        BasicDomainConfig(),
+        new BookingSlot(new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero)),
+        5,
+        10,
+        "skedda-1",
+        DateTimeOffset.UtcNow,
+        cancelledAtUtc,
+        null,
+        null,
+        reminder24hJobId,
+        reminder2hJobId);
+
     private static DefaultHttpContext NewHttp()
     {
         var http = new DefaultHttpContext();
@@ -535,7 +677,9 @@ public class UnitTests
             FallbackStartTime = startTime;
         }
 
-        public void ScheduleAttendanceCheck(long chatId, int telegramMessageId, DateTimeOffset slotStartUtc, string reminderType, DateTimeOffset runAtUtc) { }
+        public string ScheduleAttendanceCheck(long chatId, int telegramMessageId, DateTimeOffset slotStartUtc, string reminderType, DateTimeOffset runAtUtc) => string.Empty;
+
+        public void DeleteAttendanceCheck(string jobId) { }
 
         public void ScheduleRecurringPreparation(BookingUserConfig userConfig) => RecurringUserConfig = userConfig;
     }

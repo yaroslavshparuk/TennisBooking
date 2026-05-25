@@ -96,7 +96,9 @@ public sealed class BookingCancellationLinkRepository : IBookingCancellationLink
             entity.CreatedAtUtc,
             entity.CancelledAtUtc,
             entity.AttendanceReminder24hSentAtUtc,
-            entity.AttendanceReminder2hSentAtUtc);
+            entity.AttendanceReminder2hSentAtUtc,
+            entity.AttendanceReminder24hJobId,
+            entity.AttendanceReminder2hJobId);
     }
 
     public async Task<BookingCancellationLink?> GetByMessageAsync(long chatId, int telegramMessageId, CancellationToken cancellationToken)
@@ -129,7 +131,9 @@ public sealed class BookingCancellationLinkRepository : IBookingCancellationLink
             entity.CreatedAtUtc,
             entity.CancelledAtUtc,
             entity.AttendanceReminder24hSentAtUtc,
-            entity.AttendanceReminder2hSentAtUtc);
+            entity.AttendanceReminder2hSentAtUtc,
+            entity.AttendanceReminder24hJobId,
+            entity.AttendanceReminder2hJobId);
     }
 
     public async Task<bool> TryMarkCancelledAsync(long chatId, int repliedTelegramMessageId, int cancelRequestMessageId, CancellationToken cancellationToken)
@@ -156,6 +160,31 @@ public sealed class BookingCancellationLinkRepository : IBookingCancellationLink
             repliedTelegramMessageId,
             cancelRequestMessageId);
         return true;
+    }
+
+    public async Task<bool> SaveReminderJobIdAsync(
+        long chatId,
+        int telegramMessageId,
+        string reminderType,
+        string jobId,
+        CancellationToken cancellationToken)
+    {
+        var entity = await _db.BookingCancellationLinks.FirstOrDefaultAsync(
+            x => x.ChatId == chatId && x.TelegramMessageId == telegramMessageId,
+            cancellationToken);
+
+        if (entity is null)
+            return false;
+
+        if (string.Equals(reminderType, AttendanceReminderUseCase.ReminderType24h, StringComparison.Ordinal))
+            entity.AttendanceReminder24hJobId = jobId;
+        else if (string.Equals(reminderType, AttendanceReminderUseCase.ReminderType2h, StringComparison.Ordinal))
+            entity.AttendanceReminder2hJobId = jobId;
+        else
+            throw new ArgumentOutOfRangeException(nameof(reminderType), reminderType, "Unsupported reminder type.");
+
+        await _db.SaveChangesAsync(cancellationToken);
+        return !entity.CancelledAtUtc.HasValue;
     }
 
     public async Task<bool> TryMarkReminderSentAsync(long chatId, int telegramMessageId, string reminderType, CancellationToken cancellationToken)
