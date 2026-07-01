@@ -38,8 +38,10 @@ public sealed class AttendanceReminderUseCase
             return;
         }
 
-        var marked = await _links.TryMarkReminderSentAsync(chatId, telegramMessageId, reminderType, cancellationToken);
-        if (!marked)
+        var alreadySent = reminderType == ReminderType24h
+            ? link.AttendanceReminder24hSentAtUtc.HasValue
+            : link.AttendanceReminder2hSentAtUtc.HasValue;
+        if (alreadySent)
         {
             _logger.LogInformation(
                 "Skipping attendance reminder {ReminderType} for chat {ChatId}, message {MessageId}: already sent",
@@ -49,22 +51,20 @@ public sealed class AttendanceReminderUseCase
             return;
         }
 
-        var thumbsUpCount = await _notification.GetThumbsUpReactionCountAsync(chatId, telegramMessageId, cancellationToken);
-        if (thumbsUpCount > 1)
-        {
-            _logger.LogInformation(
-                "Attendance reminder {ReminderType} not needed for chat {ChatId}, message {MessageId}: thumbs-up count is {Count}",
-                reminderType,
-                chatId,
-                telegramMessageId,
-                thumbsUpCount);
-            return;
-        }
-
         var reminderText = reminderType == ReminderType24h
             ? "Нагадування: завтра корт заброньований. Якщо ніхто не планує бути присутнім, скасуйте бронювання командою /cancel у відповідь на повідомлення про бронювання."
             : "Нагадування: гра вже за 2 години. Якщо ніхто не планує бути присутнім, скасуйте бронювання командою /cancel у відповідь на повідомлення про бронювання.";
 
         await _notification.NotifyMessageAsync(reminderText, cancellationToken, telegramMessageId);
+
+        // Mark as sent only after a successful delivery. If the send throws, the flag stays
+        // unset so Hangfire's retry re-sends, rather than permanently suppressing the reminder.
+        await _links.TryMarkReminderSentAsync(chatId, telegramMessageId, reminderType, cancellationToken);
+
+        _logger.LogInformation(
+            "Attendance reminder {ReminderType} sent for chat {ChatId}, message {MessageId}",
+            reminderType,
+            chatId,
+            telegramMessageId);
     }
 }

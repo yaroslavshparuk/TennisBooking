@@ -286,7 +286,7 @@ public class UnitTests
     }
 
     [Fact]
-    public async Task AttendanceReminder_SendsMessage_WhenThumbsUpCountIsLow()
+    public async Task AttendanceReminder_SendsMessageAndMarksSent_WhenNotYetSent()
     {
         var link = new BookingCancellationLink(
             BasicDomainConfig(),
@@ -303,7 +303,6 @@ public class UnitTests
         links.Setup(x => x.TryMarkReminderSentAsync(5, 10, AttendanceReminderUseCase.ReminderType24h, It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
         var notification = new Mock<INotificationSender>();
-        notification.Setup(x => x.GetThumbsUpReactionCountAsync(5, 10, It.IsAny<CancellationToken>())).ReturnsAsync(1);
         var useCase = new AttendanceReminderUseCase(links.Object, notification.Object, NullLogger<AttendanceReminderUseCase>.Instance);
 
         await useCase.ExecuteAsync(5, 10, AttendanceReminderUseCase.ReminderType24h, CancellationToken.None);
@@ -314,10 +313,12 @@ public class UnitTests
                 It.IsAny<CancellationToken>(),
                 10),
             Times.Once);
+        // The reminder is only marked as sent after a successful delivery.
+        links.Verify(x => x.TryMarkReminderSentAsync(5, 10, AttendanceReminderUseCase.ReminderType24h, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
-    public async Task AttendanceReminder_DoesNotSend_WhenThumbsUpCountIsEnough()
+    public async Task AttendanceReminder_DoesNotSend_WhenAlreadySent()
     {
         var link = new BookingCancellationLink(
             BasicDomainConfig(),
@@ -328,18 +329,16 @@ public class UnitTests
             DateTimeOffset.UtcNow,
             null,
             null,
-            null);
+            DateTimeOffset.UtcNow);
         var links = new Mock<IBookingCancellationLinkRepository>();
         links.Setup(x => x.GetByMessageAsync(5, 10, It.IsAny<CancellationToken>())).ReturnsAsync(link);
-        links.Setup(x => x.TryMarkReminderSentAsync(5, 10, AttendanceReminderUseCase.ReminderType2h, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
         var notification = new Mock<INotificationSender>();
-        notification.Setup(x => x.GetThumbsUpReactionCountAsync(5, 10, It.IsAny<CancellationToken>())).ReturnsAsync(2);
         var useCase = new AttendanceReminderUseCase(links.Object, notification.Object, NullLogger<AttendanceReminderUseCase>.Instance);
 
         await useCase.ExecuteAsync(5, 10, AttendanceReminderUseCase.ReminderType2h, CancellationToken.None);
 
         notification.Verify(x => x.NotifyMessageAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<int?>()), Times.Never);
+        links.Verify(x => x.TryMarkReminderSentAsync(It.IsAny<long>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

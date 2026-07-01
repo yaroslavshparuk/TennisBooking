@@ -58,42 +58,6 @@ public sealed class TelegramNotificationSender : INotificationSender
     public async Task NotifyMessageAsync(string message, CancellationToken cancellationToken, int? replyToMessageId = null)
         => await SendMessageInternalAsync(message, null, cancellationToken, replyToMessageId);
 
-    public async Task<int> GetThumbsUpReactionCountAsync(long chatId, int messageId, CancellationToken cancellationToken)
-    {
-        var url = $"{BaseUrlPrefix}{_options.BotToken}/getMessageReactions";
-        var payload = new Dictionary<string, object?>
-        {
-            ["chat_id"] = chatId,
-            ["message_id"] = messageId
-        };
-        var content = new StringContent(
-            JsonSerializer.Serialize(payload),
-            Encoding.UTF8);
-        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
-        var resp = await _http.PostAsync(url, content, cancellationToken);
-        resp.EnsureSuccessStatusCode();
-        var json = await resp.Content.ReadAsStringAsync(cancellationToken);
-        using var doc = JsonDocument.Parse(json);
-        if (!doc.RootElement.TryGetProperty("result", out var result) || result.ValueKind != JsonValueKind.Array)
-            return 0;
-
-        var count = 0;
-        foreach (var reaction in result.EnumerateArray())
-        {
-            if (!reaction.TryGetProperty("type", out var typeNode) || typeNode.GetString() != "emoji")
-                continue;
-            if (!reaction.TryGetProperty("emoji", out var emojiNode) || emojiNode.GetString() != "👍")
-                continue;
-            if (!reaction.TryGetProperty("total_count", out var countNode))
-                continue;
-
-            count = countNode.GetInt32();
-            break;
-        }
-
-        return count;
-    }
-
     private async Task<TelegramNotificationResult> SendMessageInternalAsync(
         string message,
         string? parseMode,
