@@ -3,6 +3,7 @@ using System.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using TennisBooking.Application.Abstractions;
 using TennisBooking.Application.Booking;
 
 namespace TennisBooking.Infrastructure.Scheduling;
@@ -11,6 +12,8 @@ public sealed class PreciseBookingScheduler : IPreciseBookingScheduler, IHostedS
 {
     private static readonly TimeSpan WarmupBeforeTarget = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan PrecisionStep = TimeSpan.FromMilliseconds(20);
+    // A stalled warm-up must never delay the POST: abandon it this far before the target instant.
+    private static readonly TimeSpan WarmupDeadlineMargin = TimeSpan.FromMilliseconds(300);
 
     private readonly ConcurrentDictionary<string, byte> _scheduled = new();
     private readonly IServiceScopeFactory _scopeFactory;
@@ -52,8 +55,31 @@ public sealed class PreciseBookingScheduler : IPreciseBookingScheduler, IHostedS
             var warmupTime = targetTime - WarmupBeforeTarget;
             var now = DateTimeOffset.UtcNow;
 
+            using var scope = _scopeFactory.CreateScope();
+
             if (warmupTime > now)
+            {
                 await Task.Delay(warmupTime - now, token);
+                // Pre-open the pooled TCP+TLS connection so the POST below reuses a warm socket.
+                // Bound it to a deadline before the target so a slow probe can't delay the POST.
+                var remainingToDeadline = (targetTime - WarmupDeadlineMargin) - DateTimeOffset.UtcNow;
+                if (remainingToDeadline > TimeSpan.Zero)
+                {
+                    using var warmupCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    warmupCts.CancelAfter(remainingToDeadline);
+                    var skeddaClient = scope.ServiceProvider.GetRequiredService<ISkeddaClient>();
+                    try
+                    {
+                        await skeddaClient.WarmupAsync(booking, warmupCts.Token);
+                    }
+                    catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                    {
+                        _logger.LogWarning(
+                            "Skedda warm-up exceeded its deadline for {Key}; proceeding without a pre-warmed connection",
+                            key);
+                    }
+                }
+            }
 
             while (DateTimeOffset.UtcNow < targetTime)
             {
@@ -63,7 +89,6 @@ public sealed class PreciseBookingScheduler : IPreciseBookingScheduler, IHostedS
                     await Task.Delay(delay, token);
             }
 
-            using var scope = _scopeFactory.CreateScope();
             var executeBooking = scope.ServiceProvider.GetRequiredService<ExecuteBookingUseCase>();
             await executeBooking.ExecuteAsync(booking, token);
             _logger.LogInformation("Precise timer triggered booking for {Username} at {Target}", booking.UserConfig.Username, targetTime);

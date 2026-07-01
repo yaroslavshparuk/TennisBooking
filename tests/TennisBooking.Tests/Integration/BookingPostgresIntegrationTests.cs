@@ -43,6 +43,7 @@ public sealed class BookingPostgresIntegrationTests
         var scheduler = new HangfireBookingScheduler(backgroundJobs, Mock.Of<IPreciseBookingScheduler>());
         var service = new PrepareBookingUseCase(
             new SkeddaClient(
+                new SingleClientHttpClientFactory(skedda.BaseUrl),
                 Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = skedda.BaseUrl }),
                 NullLogger<SkeddaClient>.Instance),
             scheduler,
@@ -90,6 +91,7 @@ public sealed class BookingPostgresIntegrationTests
         await db.SaveChangesAsync();
 
         var skeddaClient = new SkeddaClient(
+            new SingleClientHttpClientFactory(skedda.BaseUrl),
             Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = skedda.BaseUrl }),
             NullLogger<SkeddaClient>.Instance);
         var notification = new Mock<INotificationSender>();
@@ -136,6 +138,7 @@ public sealed class BookingPostgresIntegrationTests
         notification.Setup(x => x.NotifyBookingSucceededAsync(It.IsAny<BookingUserConfig>(), It.IsAny<BookingSlot>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new TelegramNotificationResult(5, 10));
         var skeddaClient = new SkeddaClient(
+            new SingleClientHttpClientFactory(skedda.BaseUrl),
             Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = skedda.BaseUrl }),
             NullLogger<SkeddaClient>.Instance);
         var dedupe = new InMemoryBookingDeduplicationStore();
@@ -152,7 +155,8 @@ public sealed class BookingPostgresIntegrationTests
         await execute.ExecuteAsync(new PreparedBooking(
             ToDomain(userConfig),
             new BookingSlot(startTime),
-            new { booking = new { spaces = new[] { userConfig.ResourceId } } },
+            "{\"booking\":{\"spaces\":[\"" + userConfig.ResourceId + "\"]}}",
+            "X-Skedda-RequestVerificationCookie=csrf; X-Skedda-ApplicationCookie=app",
             "token",
             "csrf",
             "app"), CancellationToken.None);
@@ -193,7 +197,8 @@ public sealed class BookingPostgresIntegrationTests
         await execute.ExecuteAsync(new PreparedBooking(
             ToDomain(NewConfig("reminder-cancel")),
             slot,
-            new { },
+            "{}",
+            "X-Skedda-RequestVerificationCookie=csrf; X-Skedda-ApplicationCookie=app",
             "token",
             "csrf",
             "app"), CancellationToken.None);
@@ -313,6 +318,13 @@ public sealed class BookingPostgresIntegrationTests
     {
         public FixedClock(DateTimeOffset utcNow) => UtcNow = utcNow;
         public DateTimeOffset UtcNow { get; }
+    }
+
+    private sealed class SingleClientHttpClientFactory : IHttpClientFactory
+    {
+        private readonly string _baseUrl;
+        public SingleClientHttpClientFactory(string baseUrl) => _baseUrl = baseUrl;
+        public HttpClient CreateClient(string name) => new() { BaseAddress = new Uri(_baseUrl) };
     }
 
     private sealed class DockerFactAttribute : FactAttribute

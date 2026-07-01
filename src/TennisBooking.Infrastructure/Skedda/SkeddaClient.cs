@@ -14,6 +14,10 @@ namespace TennisBooking.Infrastructure.Skedda;
 
 public sealed class SkeddaClient : ISkeddaClient
 {
+    // Name of the pooled HttpClient registered via AddHttpClient in Program.cs.
+    // Referenced there so the registration name and the client requested here can't drift.
+    public const string SkeddaHttpClientName = "Skedda";
+
     private const string AccountLoginPath = "/account/login";
     private const string LoginPath = "/logins";
     private const string GetBookingsPath = "/booking";
@@ -23,11 +27,16 @@ public sealed class SkeddaClient : ISkeddaClient
     private const string ApplicationCookieName = "X-Skedda-ApplicationCookie";
     private const string CsrfCookieName = "X-Skedda-RequestVerificationCookie";
 
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly SkeddaOptions _options;
     private readonly ILogger<SkeddaClient> _logger;
 
-    public SkeddaClient(IOptions<SkeddaOptions> options, ILogger<SkeddaClient> logger)
+    public SkeddaClient(
+        IHttpClientFactory httpClientFactory,
+        IOptions<SkeddaOptions> options,
+        ILogger<SkeddaClient> logger)
     {
+        _httpClientFactory = httpClientFactory;
         _options = options.Value;
         _logger = logger;
     }
@@ -43,10 +52,15 @@ public sealed class SkeddaClient : ISkeddaClient
             slot.StartTime);
         var session = await CreateSessionAsync(userConfig, cancellationToken);
         _logger.LogInformation("Prepared Skedda booking session for user {Username}", userConfig.Username);
+        // Pre-serialize the request body and pre-build the Cookie header now (off the hot path),
+        // so BookAsync at the target instant only allocates a StringContent and calls SendAsync.
+        var bodyJson = JsonConvert.SerializeObject(BuildBookingBody(userConfig, slot));
+        var cookieHeader = BuildCookieHeader(session.CsrfCookie, session.ApplicationCookie);
         return new PreparedBooking(
             userConfig,
             slot,
-            BuildBookingBody(userConfig, slot),
+            bodyJson,
+            cookieHeader,
             session.RequestVerificationToken,
             session.CsrfCookie,
             session.ApplicationCookie);
@@ -58,14 +72,14 @@ public sealed class SkeddaClient : ISkeddaClient
             "Sending Skedda booking request for user {Username}, slot {SlotStart}",
             booking.UserConfig.Username,
             booking.Slot.StartTime);
-        var baseUri = new Uri(_options.ApiBaseUrl);
-        using var client = new HttpClient { BaseAddress = baseUri };
+        var client = _httpClientFactory.CreateClient(SkeddaHttpClientName);
 
-        var bookReq = new HttpRequestMessage(HttpMethod.Post, BookingPath);
-        bookReq.Content = JsonContent(booking.Body);
+        using var bookReq = new HttpRequestMessage(HttpMethod.Post, BookingPath)
+        {
+            Content = new StringContent(booking.BodyJson, Encoding.UTF8, "application/json")
+        };
         bookReq.Headers.Add(CsrfHeaderName, booking.RequestVerificationToken);
-        bookReq.Headers.Add(CookieHeaderName,
-            $"{CsrfCookieName}={booking.CsrfCookie}; {ApplicationCookieName}={booking.ApplicationCookie}");
+        bookReq.Headers.Add(CookieHeaderName, booking.CookieHeader);
 
         var bookResp = await client.SendAsync(bookReq, cancellationToken);
         if (!bookResp.IsSuccessStatusCode)
@@ -81,6 +95,45 @@ public sealed class SkeddaClient : ISkeddaClient
         return new SkeddaBookingResult(bookingId);
     }
 
+    public async Task WarmupAsync(PreparedBooking booking, CancellationToken cancellationToken)
+    {
+        // Issue a cheap UNAUTHENTICATED GET on the pooled client during the pre-warm window so the
+        // TCP+TLS handshake (and Front Door edge routing) completes ahead of the target instant,
+        // letting the booking POST reuse an already-established connection. Warming the socket does
+        // not need the session, so we deliberately do NOT replay the CSRF/cookie headers here:
+        // that avoids touching the antiforgery-token page and minimizes anomalous request surface.
+        // ResponseHeadersRead returns as soon as the connection is established and headers arrive.
+        // Best-effort: never throws except on cancellation.
+        try
+        {
+            var client = _httpClientFactory.CreateClient(SkeddaHttpClientName);
+            using var warmReq = new HttpRequestMessage(HttpMethod.Get, AccountLoginPath);
+            using var warmResp = await client.SendAsync(
+                warmReq, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            if (warmResp.IsSuccessStatusCode)
+                _logger.LogInformation(
+                    "Warmed up Skedda connection for user {Username} (status {StatusCode})",
+                    booking.UserConfig.Username,
+                    (int)warmResp.StatusCode);
+            else
+                _logger.LogWarning(
+                    "Skedda warm-up GET returned {StatusCode} for user {Username}",
+                    (int)warmResp.StatusCode,
+                    booking.UserConfig.Username);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Skedda connection warm-up failed for user {Username}; proceeding without a pre-warmed connection",
+                booking.UserConfig.Username);
+        }
+    }
+
     public async Task CancelAsync(PreparedBooking booking, string bookingId, CancellationToken cancellationToken)
     {
         _logger.LogInformation(
@@ -89,12 +142,11 @@ public sealed class SkeddaClient : ISkeddaClient
             booking.UserConfig.Username);
         var session = await CreateSessionAsync(booking.UserConfig, cancellationToken);
 
-        var baseUri = new Uri(_options.ApiBaseUrl);
-        using var client = new HttpClient { BaseAddress = baseUri };
-        var deleteReq = new HttpRequestMessage(HttpMethod.Delete, $"{BookingPath}/{bookingId}");
+        var client = _httpClientFactory.CreateClient(SkeddaHttpClientName);
+        using var deleteReq = new HttpRequestMessage(HttpMethod.Delete, $"{BookingPath}/{bookingId}");
         deleteReq.Headers.Add(CsrfHeaderName, session.RequestVerificationToken);
         deleteReq.Headers.Add(CookieHeaderName,
-            $"{CsrfCookieName}={session.CsrfCookie}; {ApplicationCookieName}={session.ApplicationCookie}");
+            BuildCookieHeader(session.CsrfCookie, session.ApplicationCookie));
 
         var deleteResp = await client.SendAsync(deleteReq, cancellationToken);
         if (!deleteResp.IsSuccessStatusCode)
@@ -150,6 +202,9 @@ public sealed class SkeddaClient : ISkeddaClient
 
     private static StringContent JsonContent(object value)
         => new(JsonConvert.SerializeObject(value), Encoding.UTF8, "application/json");
+
+    private static string BuildCookieHeader(string csrfCookie, string applicationCookie)
+        => $"{CsrfCookieName}={csrfCookie}; {ApplicationCookieName}={applicationCookie}";
 
     private static object BuildBookingBody(BookingUserConfig userConfig, BookingSlot slot)
         => new

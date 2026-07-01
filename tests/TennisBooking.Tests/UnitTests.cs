@@ -413,6 +413,7 @@ public class UnitTests
         });
 
         var client = new SkeddaClient(
+            new SingleClientHttpClientFactory(server.BaseUrl),
             Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = server.BaseUrl }),
             NullLogger<SkeddaClient>.Instance);
 
@@ -432,6 +433,7 @@ public class UnitTests
             return """{"booking":{"id":"1"}}""";
         });
         var client = new SkeddaClient(
+            new SingleClientHttpClientFactory(skedda.BaseUrl),
             Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = skedda.BaseUrl }),
             NullLogger<SkeddaClient>.Instance);
         var booking = Prepared(BasicDomainConfig(), new BookingSlot(DateTimeOffset.UtcNow));
@@ -628,10 +630,18 @@ public class UnitTests
     private static PreparedBooking Prepared(BookingUserConfig user, BookingSlot slot) => new(
         user,
         slot,
-        new { booking = new { spaces = new[] { user.ResourceId } } },
+        "{\"booking\":{\"spaces\":[\"" + user.ResourceId + "\"]}}",
+        "X-Skedda-RequestVerificationCookie=csrf; X-Skedda-ApplicationCookie=app",
         "token",
         "csrf",
         "app");
+
+    private sealed class SingleClientHttpClientFactory : IHttpClientFactory
+    {
+        private readonly string _baseUrl;
+        public SingleClientHttpClientFactory(string baseUrl) => _baseUrl = baseUrl;
+        public HttpClient CreateClient(string name) => new() { BaseAddress = new Uri(_baseUrl) };
+    }
 
     private static BookingCancellationLink BookingLink(
         DateTimeOffset? cancelledAtUtc,

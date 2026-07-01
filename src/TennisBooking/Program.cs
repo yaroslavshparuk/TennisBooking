@@ -1,8 +1,11 @@
+using System.Net;
+using System.Net.Sockets;
 using Hangfire;
 using Hangfire.PostgreSql;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Options;
 using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
@@ -26,6 +29,51 @@ var telegramConfig = builder.Configuration.GetSection("Telegram");
 builder.Services.Configure<SkeddaOptions>(skeddaConfig);
 builder.Services.Configure<TelegramOptions>(telegramConfig);
 builder.Services.AddHttpClient<TelegramNotificationSender>();
+
+// Pooled, keep-alive HttpClient for the latency-critical Skedda booking POST.
+// IHttpClientFactory caches a single SocketsHttpHandler for this named client and reuses it
+// across every CreateClient call and across DI scopes, so the TCP+TLS connection established
+// during the pre-warm window (see PreciseBookingScheduler) is still open at the target instant
+// instead of a fresh handshake being paid on the hot path.
+builder.Services.AddHttpClient(SkeddaClient.SkeddaHttpClientName, (sp, client) =>
+    {
+        var opts = sp.GetRequiredService<IOptions<SkeddaOptions>>().Value;
+        client.BaseAddress = new Uri(opts.ApiBaseUrl);
+        // Opportunistically negotiate HTTP/2 via ALPN; silently falls back to HTTP/1.1.
+        client.DefaultRequestVersion = HttpVersion.Version20;
+        client.DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
+    })
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+    {
+        // We attach the session Cookie header manually on every request (BuildCookieHeader).
+        // Disable the handler's own CookieContainer so a Set-Cookie received on a pooled
+        // connection (e.g. during the warm-up GET) can never be auto-appended to a later
+        // request's manual Cookie header and produce a duplicate/conflicting cookie.
+        UseCookies = false,
+        // Keep connections warm for the process lifetime, recycling periodically so we still
+        // pick up Front Door DNS/IP changes.
+        PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+        PooledConnectionIdleTimeout = TimeSpan.FromMinutes(5),
+        // Headroom so concurrent same-window bookings (one warm-up + POST each) never queue for a
+        // connection under an HTTP/1.1 fallback; free under HTTP/2 where a connection multiplexes.
+        MaxConnectionsPerServer = 10,
+        EnableMultipleHttp2Connections = true,
+        // Disable Nagle's algorithm (TCP_NODELAY) so the small booking POST is flushed immediately.
+        ConnectCallback = async (context, cancellationToken) =>
+        {
+            var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+            try
+            {
+                await socket.ConnectAsync(context.DnsEndPoint, cancellationToken);
+                return new NetworkStream(socket, ownsSocket: true);
+            }
+            catch
+            {
+                socket.Dispose();
+                throw;
+            }
+        }
+    });
 
 var connString = builder.Configuration.GetConnectionString("Default")
                  ?? throw new InvalidOperationException("Connection string 'Default' not found.");
@@ -58,7 +106,9 @@ builder.Services.AddScoped<IUserBookingConfigRepository, UserBookingConfigReposi
 builder.Services.AddScoped<IBookingCancellationLinkRepository, BookingCancellationLinkRepository>();
 builder.Services.AddScoped<ITelegramPollingStateRepository, TelegramPollingStateRepository>();
 builder.Services.AddScoped<ITelegramChatRepository, TelegramChatRepository>();
-builder.Services.AddScoped<ISkeddaClient, SkeddaClient>();
+// Singleton: SkeddaClient now holds only IHttpClientFactory + IOptions + ILogger (all singleton-safe)
+// and no per-request mutable state, so a single instance avoids per-scope allocation on the hot path.
+builder.Services.AddSingleton<ISkeddaClient, SkeddaClient>();
 builder.Services.AddScoped<INotificationSender, TelegramNotificationSender>();
 builder.Services.AddHostedService<TelegramLongPollingService>();
 builder.Services.AddScoped<IBookingScheduler, HangfireBookingScheduler>();

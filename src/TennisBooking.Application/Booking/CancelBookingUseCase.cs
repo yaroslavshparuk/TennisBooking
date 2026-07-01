@@ -34,10 +34,12 @@ public sealed class CancelBookingUseCase
 
         if (!link.CancelledAtUtc.HasValue)
         {
+            // Inert placeholder: CancelAsync builds its own session and never reads BodyJson/CookieHeader.
             var prepared = new PreparedBooking(
                 link.UserConfig,
                 link.Slot,
-                new { },
+                string.Empty,
+                string.Empty,
                 string.Empty,
                 string.Empty,
                 string.Empty);
