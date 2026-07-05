@@ -10,9 +10,10 @@ public interface ISkeddaClient
 
     /// <summary>
     /// Best-effort pre-warm of the pooled connection to Skedda so the booking POST reuses an
-    /// already-established TCP+TLS connection. Never throws (except on cancellation).
+    /// already-established TCP+TLS connection, and (as a side effect) sample the server clock. Never
+    /// throws except on cancellation; returns <see cref="SkeddaWarmupResult.Established"/> = false on failure.
     /// </summary>
-    Task WarmupAsync(PreparedBooking booking, CancellationToken cancellationToken);
+    Task<SkeddaWarmupResult> WarmupAsync(PreparedBooking booking, CancellationToken cancellationToken);
 
     Task CancelAsync(PreparedBooking booking, string bookingId, CancellationToken cancellationToken);
 }

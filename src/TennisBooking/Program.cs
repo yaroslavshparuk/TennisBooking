@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
 using Hangfire;
 using Hangfire.PostgreSql;
@@ -39,7 +40,9 @@ builder.Services.AddHttpClient(SkeddaClient.SkeddaHttpClientName, (sp, client) =
     {
         var opts = sp.GetRequiredService<IOptions<SkeddaOptions>>().Value;
         client.BaseAddress = new Uri(opts.ApiBaseUrl);
-        // Opportunistically negotiate HTTP/2 via ALPN; silently falls back to HTTP/1.1.
+        // Request HTTP/2; the handler negotiates it via ALPN (configured in SslOptions below), and
+        // falls back to HTTP/1.1 if the origin ever stops offering h2. Under h2 the burst's concurrent
+        // POSTs multiplex over a single warm connection.
         client.DefaultRequestVersion = HttpVersion.Version20;
         client.DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
     })
@@ -54,11 +57,25 @@ builder.Services.AddHttpClient(SkeddaClient.SkeddaHttpClientName, (sp, client) =
         // pick up Front Door DNS/IP changes.
         PooledConnectionLifetime = TimeSpan.FromMinutes(10),
         PooledConnectionIdleTimeout = TimeSpan.FromMinutes(5),
-        // Headroom so concurrent same-window bookings (one warm-up + POST each) never queue for a
-        // connection under an HTTP/1.1 fallback; free under HTTP/2 where a connection multiplexes.
+        // Headroom so concurrent same-window bookings never queue for a connection under an HTTP/1.1
+        // fallback; free under HTTP/2 where a connection multiplexes.
         MaxConnectionsPerServer = 10,
         EnableMultipleHttp2Connections = true,
-        // Disable Nagle's algorithm (TCP_NODELAY) so the small booking POST is flushed immediately.
+        // Offer h2 (then http/1.1) via ALPN. The handler performs TLS itself over the transport stream
+        // returned by ConnectCallback and honours these protocols, so the connection negotiates HTTP/2
+        // deterministically (verified against galaktyka.skedda.com); default server-cert validation and
+        // SNI are applied automatically. Setting the request version alone is NOT enough here — a custom
+        // ConnectCallback otherwise leaves the handshake at the runtime default (HTTP/1.1 in production).
+        SslOptions = new SslClientAuthenticationOptions
+        {
+            ApplicationProtocols = new List<SslApplicationProtocol>
+            {
+                SslApplicationProtocol.Http2,
+                SslApplicationProtocol.Http11
+            }
+        },
+        // Return a plain connected transport stream with Nagle's algorithm disabled (TCP_NODELAY) so the
+        // small booking POST is flushed immediately; the handler layers TLS (with the ALPN above) on top.
         ConnectCallback = async (context, cancellationToken) =>
         {
             var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
