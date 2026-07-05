@@ -2,4 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/TennisBooking/TennisBooking.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TennisBooking.Tests/TennisBooking.Tests.csproj" />
+  </Folder>
 </Solution>

@@ -83,7 +83,19 @@ public sealed class SkeddaClient : ISkeddaClient
 
         var bookResp = await client.SendAsync(bookReq, cancellationToken);
         if (!bookResp.IsSuccessStatusCode)
-            throw new HttpRequestException($"Response from Skedda {await bookResp.Content.ReadAsStringAsync(cancellationToken)}");
+        {
+            var status = (int)bookResp.StatusCode;
+            var errorBody = await bookResp.Content.ReadAsStringAsync(cancellationToken);
+            // A client-side business rejection (slot already taken, not open yet, validation) is an
+            // expected race outcome and comes back as a NON-auth 4xx. Authentication (401/403), rate
+            // limiting (429) and server errors (5xx) are real failures the caller must not mistake for
+            // a normal lost race — regardless of what the response body happens to contain.
+            var expectedRejection = status is >= 400 and < 500
+                && status is not 401 and not 403 and not 429;
+            if (expectedRejection)
+                throw new SkeddaBookingRejectedException(status, errorBody);
+            throw new HttpRequestException($"Skedda booking failed with status {status}: {errorBody}");
+        }
 
         var body = await bookResp.Content.ReadAsStringAsync(cancellationToken);
         dynamic? json = JsonConvert.DeserializeObject(body);
@@ -95,31 +107,36 @@ public sealed class SkeddaClient : ISkeddaClient
         return new SkeddaBookingResult(bookingId);
     }
 
-    public async Task WarmupAsync(PreparedBooking booking, CancellationToken cancellationToken)
+    public async Task<SkeddaWarmupResult> WarmupAsync(PreparedBooking booking, CancellationToken cancellationToken)
     {
         // Issue a cheap UNAUTHENTICATED GET on the pooled client during the pre-warm window so the
         // TCP+TLS handshake (and Front Door edge routing) completes ahead of the target instant,
         // letting the booking POST reuse an already-established connection. Warming the socket does
-        // not need the session, so we deliberately do NOT replay the CSRF/cookie headers here:
-        // that avoids touching the antiforgery-token page and minimizes anomalous request surface.
+        // not need the session, so we deliberately do NOT replay the CSRF/cookie headers here.
         // ResponseHeadersRead returns as soon as the connection is established and headers arrive.
+        // We also read the server Date header to estimate the host<->Skedda clock skew.
         // Best-effort: never throws except on cancellation.
         try
         {
             var client = _httpClientFactory.CreateClient(SkeddaHttpClientName);
             using var warmReq = new HttpRequestMessage(HttpMethod.Get, AccountLoginPath);
+            var sentAt = DateTimeOffset.UtcNow;
             using var warmResp = await client.SendAsync(
                 warmReq, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-            if (warmResp.IsSuccessStatusCode)
-                _logger.LogInformation(
-                    "Warmed up Skedda connection for user {Username} (status {StatusCode})",
-                    booking.UserConfig.Username,
-                    (int)warmResp.StatusCode);
-            else
-                _logger.LogWarning(
-                    "Skedda warm-up GET returned {StatusCode} for user {Username}",
-                    (int)warmResp.StatusCode,
-                    booking.UserConfig.Username);
+            var roundTrip = DateTimeOffset.UtcNow - sentAt;
+
+            TimeSpan? skew = warmResp.Headers.Date is { } serverDate
+                ? EstimateClockSkew(serverDate, sentAt, roundTrip)
+                : null;
+
+            _logger.LogInformation(
+                "Warmed up Skedda connection for user {Username} (status {StatusCode}, rtt {RttMs:F0} ms, skew {SkewMs})",
+                booking.UserConfig.Username,
+                (int)warmResp.StatusCode,
+                roundTrip.TotalMilliseconds,
+                skew?.TotalMilliseconds.ToString("F0") ?? "n/a");
+            // Any completed response means the connection is warm, even a non-2xx.
+            return new SkeddaWarmupResult(Established: true, ClockSkew: skew);
         }
         catch (OperationCanceledException)
         {
@@ -131,8 +148,17 @@ public sealed class SkeddaClient : ISkeddaClient
                 ex,
                 "Skedda connection warm-up failed for user {Username}; proceeding without a pre-warmed connection",
                 booking.UserConfig.Username);
+            return new SkeddaWarmupResult(Established: false, ClockSkew: null);
         }
     }
+
+    /// <summary>
+    /// Estimate the server-minus-host clock offset from a response Date header: the server stamped
+    /// <paramref name="serverDate"/> roughly half a round-trip after we sent, so we compare it to our
+    /// clock at that same midpoint. Coarse (Date is second-resolution). Exposed for testing.
+    /// </summary>
+    public static TimeSpan EstimateClockSkew(DateTimeOffset serverDate, DateTimeOffset sentAtUtc, TimeSpan roundTrip)
+        => serverDate - (sentAtUtc + TimeSpan.FromTicks(roundTrip.Ticks / 2));
 
     public async Task CancelAsync(PreparedBooking booking, string bookingId, CancellationToken cancellationToken)
     {
