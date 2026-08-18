@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using TennisBooking.Application.Abstractions;
 using Microsoft.Extensions.Logging;
 
@@ -87,21 +88,39 @@ public sealed class ExecuteBookingUseCase
         CancellationToken followUpToken,
         Action? onBooked = null)
     {
+        // Every shot reports offset + HTTP status + round-trip, whatever its outcome, because the burst
+        // offsets are tuned from these logs: a shot that vanishes silently is a request Skedda may well
+        // have processed while we recorded nothing about it.
+        var rtt = Stopwatch.StartNew();
         SkeddaBookingResult bookResult;
         try
         {
             bookResult = await _skeddaClient.BookAsync(booking, sendToken);
+            rtt.Stop();
         }
         catch (OperationCanceledException)
         {
+            // A sibling shot won, or the burst hard-stop fired, while this POST was still in flight.
+            // Cancelling does NOT un-send it — Skedda may still have processed the request — so record
+            // it rather than letting it disappear and under-report how many requests the burst sent.
+            rtt.Stop();
+            _logger.LogInformation(
+                "Burst shot at offset {OffsetMs} ms cancelled in flight after {RttMs:F0} ms for user {Username}, slot {SlotStart}; request was sent and its outcome at Skedda is unknown",
+                offsetMs,
+                rtt.Elapsed.TotalMilliseconds,
+                booking.UserConfig.Username,
+                booking.Slot.StartTime);
             throw;
         }
         catch (SkeddaBookingRejectedException ex)
         {
             // Expected: this shot lost the race or arrived before the slot opened.
+            rtt.Stop();
             _logger.LogInformation(
-                "Burst shot at offset {OffsetMs} ms was rejected (expected) for user {Username}, slot {SlotStart}: {Reason}",
+                "Burst shot at offset {OffsetMs} ms was rejected (expected) with status {StatusCode} after {RttMs:F0} ms for user {Username}, slot {SlotStart}: {Reason}",
                 offsetMs,
+                ex.StatusCode,
+                rtt.Elapsed.TotalMilliseconds,
                 booking.UserConfig.Username,
                 booking.Slot.StartTime,
                 ex.Message);
@@ -110,10 +129,14 @@ public sealed class ExecuteBookingUseCase
         catch (Exception ex)
         {
             // Unexpected: auth failure, 5xx, TLS, malformed response — a real regression, not a lost race.
+            // 429 lands here too, which is how burst-induced throttling would first become visible.
+            rtt.Stop();
             _logger.LogWarning(
                 ex,
-                "Burst shot at offset {OffsetMs} ms failed unexpectedly for user {Username}, slot {SlotStart}",
+                "Burst shot at offset {OffsetMs} ms failed unexpectedly with status {StatusCode} after {RttMs:F0} ms for user {Username}, slot {SlotStart}",
                 offsetMs,
+                (ex as HttpRequestException)?.StatusCode is { } s ? ((int)s).ToString() : "n/a",
+                rtt.Elapsed.TotalMilliseconds,
                 booking.UserConfig.Username,
                 booking.Slot.StartTime);
             return false;
@@ -125,9 +148,11 @@ public sealed class ExecuteBookingUseCase
             // Another shot already claimed the slot. This shot's POST also succeeded, so a second
             // booking may now exist on Skedda that we do not track — surface it loudly.
             _logger.LogWarning(
-                "Burst shot at offset {OffsetMs} ms also booked slot (id {SkeddaBookingId}) but another shot already claimed {BookingKey}; this duplicate booking is untracked (no cancellation link/reminders)",
+                "Burst shot at offset {OffsetMs} ms also booked slot (id {SkeddaBookingId}, status {StatusCode}, rtt {RttMs:F0} ms) but another shot already claimed {BookingKey}; this duplicate booking is untracked (no cancellation link/reminders)",
                 offsetMs,
                 bookResult.BookingId,
+                bookResult.StatusCode,
+                rtt.Elapsed.TotalMilliseconds,
                 bookingKey);
             return true;
         }
@@ -135,8 +160,10 @@ public sealed class ExecuteBookingUseCase
         // Slot is ours. Stop the remaining shots NOW, before the (slower) follow-ups run.
         onBooked?.Invoke();
         _logger.LogInformation(
-            "Burst shot at offset {OffsetMs} ms won the booking for user {Username}, slot {SlotStart}",
+            "Burst shot at offset {OffsetMs} ms won the booking with status {StatusCode} after {RttMs:F0} ms for user {Username}, slot {SlotStart}",
             offsetMs,
+            bookResult.StatusCode,
+            rtt.Elapsed.TotalMilliseconds,
             booking.UserConfig.Username,
             booking.Slot.StartTime);
 

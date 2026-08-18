@@ -104,7 +104,7 @@ public sealed class SkeddaClient : ISkeddaClient
             throw new InvalidOperationException("Skedda booking id was not found in response.");
 
         _logger.LogInformation("Skedda booking succeeded with id {SkeddaBookingId}", bookingId);
-        return new SkeddaBookingResult(bookingId);
+        return new SkeddaBookingResult(bookingId, (int)bookResp.StatusCode);
     }
 
     public async Task<SkeddaWarmupResult> WarmupAsync(PreparedBooking booking, CancellationToken cancellationToken)
