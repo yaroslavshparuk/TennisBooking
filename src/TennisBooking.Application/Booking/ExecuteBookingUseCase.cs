@@ -88,26 +88,27 @@ public sealed class ExecuteBookingUseCase
         CancellationToken followUpToken,
         Action? onBooked = null)
     {
-        // Every shot reports offset + HTTP status + round-trip, whatever its outcome, because the burst
+        // Every shot reports offset + HTTP status + timing, whatever its outcome, because the burst
         // offsets are tuned from these logs: a shot that vanishes silently is a request Skedda may well
-        // have processed while we recorded nothing about it.
-        var rtt = Stopwatch.StartNew();
+        // have processed while we recorded nothing about it. Shots that got a response report RttMs (a
+        // real round-trip); a shot cancelled mid-flight never got one, so it reports ElapsedMs instead.
+        var elapsed = Stopwatch.StartNew();
         SkeddaBookingResult bookResult;
         try
         {
             bookResult = await _skeddaClient.BookAsync(booking, sendToken);
-            rtt.Stop();
+            elapsed.Stop();
         }
         catch (OperationCanceledException)
         {
             // A sibling shot won, or the burst hard-stop fired, while this POST was still in flight.
             // Cancelling does NOT un-send it — Skedda may still have processed the request — so record
             // it rather than letting it disappear and under-report how many requests the burst sent.
-            rtt.Stop();
+            elapsed.Stop();
             _logger.LogInformation(
-                "Burst shot at offset {OffsetMs} ms cancelled in flight after {RttMs:F0} ms for user {Username}, slot {SlotStart}; request was sent and its outcome at Skedda is unknown",
+                "Burst shot at offset {OffsetMs} ms cancelled in flight after {ElapsedMs:F0} ms for user {Username}, slot {SlotStart}; request was sent and its outcome at Skedda is unknown",
                 offsetMs,
-                rtt.Elapsed.TotalMilliseconds,
+                elapsed.Elapsed.TotalMilliseconds,
                 booking.UserConfig.Username,
                 booking.Slot.StartTime);
             throw;
@@ -115,12 +116,12 @@ public sealed class ExecuteBookingUseCase
         catch (SkeddaBookingRejectedException ex)
         {
             // Expected: this shot lost the race or arrived before the slot opened.
-            rtt.Stop();
+            elapsed.Stop();
             _logger.LogInformation(
                 "Burst shot at offset {OffsetMs} ms was rejected (expected) with status {StatusCode} after {RttMs:F0} ms for user {Username}, slot {SlotStart}: {Reason}",
                 offsetMs,
                 ex.StatusCode,
-                rtt.Elapsed.TotalMilliseconds,
+                elapsed.Elapsed.TotalMilliseconds,
                 booking.UserConfig.Username,
                 booking.Slot.StartTime,
                 ex.Message);
@@ -130,13 +131,13 @@ public sealed class ExecuteBookingUseCase
         {
             // Unexpected: auth failure, 5xx, TLS, malformed response — a real regression, not a lost race.
             // 429 lands here too, which is how burst-induced throttling would first become visible.
-            rtt.Stop();
+            elapsed.Stop();
             _logger.LogWarning(
                 ex,
                 "Burst shot at offset {OffsetMs} ms failed unexpectedly with status {StatusCode} after {RttMs:F0} ms for user {Username}, slot {SlotStart}",
                 offsetMs,
                 (ex as HttpRequestException)?.StatusCode is { } s ? ((int)s).ToString() : "n/a",
-                rtt.Elapsed.TotalMilliseconds,
+                elapsed.Elapsed.TotalMilliseconds,
                 booking.UserConfig.Username,
                 booking.Slot.StartTime);
             return false;
@@ -152,7 +153,7 @@ public sealed class ExecuteBookingUseCase
                 offsetMs,
                 bookResult.BookingId,
                 bookResult.StatusCode,
-                rtt.Elapsed.TotalMilliseconds,
+                elapsed.Elapsed.TotalMilliseconds,
                 bookingKey);
             return true;
         }
@@ -163,7 +164,7 @@ public sealed class ExecuteBookingUseCase
             "Burst shot at offset {OffsetMs} ms won the booking with status {StatusCode} after {RttMs:F0} ms for user {Username}, slot {SlotStart}",
             offsetMs,
             bookResult.StatusCode,
-            rtt.Elapsed.TotalMilliseconds,
+            elapsed.Elapsed.TotalMilliseconds,
             booking.UserConfig.Username,
             booking.Slot.StartTime);
 
