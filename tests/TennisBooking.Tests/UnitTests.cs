@@ -797,6 +797,112 @@ public class UnitTests
         DayOfWeek.Monday,
         10);
 
+    [Fact]
+    public void SkeddaBurst_ResolveOffsets_DedupsAndOrdersEarliestFirst()
+    {
+        Assert.Equal(new[] { -60, -30, 0 }, SkeddaBurst.ResolveOffsets(new[] { 0, -30, -60, -30 }));
+        // No configured offsets => the documented defaults, not an empty burst.
+        Assert.Equal(SkeddaBurst.DefaultOffsetsMs, SkeddaBurst.ResolveOffsets(Array.Empty<int>()));
+        Assert.Equal(SkeddaBurst.DefaultOffsetsMs, SkeddaBurst.ResolveOffsets(null));
+    }
+
+    [Fact]
+    public void SkeddaBurst_RegistersOnePipePerShot_ClampedToMaxPipes()
+    {
+        Assert.Equal(3, SkeddaBurst.PipeCount(new[] { -60, -30, 0 }));
+        // Duplicates collapse into one shot, so they must not inflate the pipe count.
+        Assert.Equal(2, SkeddaBurst.PipeCount(new[] { -60, -60, 0 }));
+        Assert.Equal(SkeddaBurst.DefaultOffsetsMs.Length, SkeddaBurst.PipeCount(Array.Empty<int>()));
+        Assert.Equal(SkeddaBurst.MaxPipes, SkeddaBurst.PipeCount(Enumerable.Range(1, 40).ToArray()));
+        Assert.Equal(1, SkeddaBurst.PipeCount(new[] { 0 }));
+    }
+
+    [Fact]
+    public void SkeddaBurst_GivesEveryShotItsOwnPipe()
+    {
+        // The point of the per-pipe burst: no two shots may share a connection. Guards against the
+        // routing collapsing back to a single pipe (which would restore the shared-socket queueing).
+        var offsets = SkeddaBurst.ResolveOffsets(new[] { -100, -80, -60, -40, -20, 0 });
+        var pipeCount = SkeddaBurst.PipeCount(offsets);
+        var pipes = offsets.Select((_, index) => SkeddaBurst.PipeForShot(index, pipeCount)).ToArray();
+
+        Assert.Equal(offsets.Length, pipes.Distinct().Count());
+        Assert.All(pipes, pipe => Assert.InRange(pipe, 0, pipeCount - 1));
+        // Past the cap the pipes are reused round-robin rather than escaping the registered range.
+        Assert.Equal(0, SkeddaBurst.PipeForShot(SkeddaBurst.MaxPipes, SkeddaBurst.MaxPipes));
+    }
+
+    [Fact]
+    public async Task SkeddaClient_SendsBookingAndWarmupOnTheRequestedPipeClient()
+    {
+        using var skedda = new FakeSkeddaServer();
+        skedda.Enqueue(HttpMethod.Post, "/bookings", ctx =>
+        {
+            ctx.Response.StatusCode = 200;
+            return """{"booking":{"id":"1"}}""";
+        });
+        skedda.Enqueue(HttpMethod.Get, "/account/login", ctx =>
+        {
+            ctx.Response.StatusCode = 200;
+            return "<html>ok</html>";
+        });
+        var factory = new RecordingHttpClientFactory(skedda.BaseUrl);
+        var client = new SkeddaClient(
+            factory,
+            Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = skedda.BaseUrl }),
+            NullLogger<SkeddaClient>.Instance);
+        var booking = Prepared(BasicDomainConfig(), new BookingSlot(DateTimeOffset.UtcNow));
+
+        await client.BookAsync(booking, 3, TestContext.Current.CancellationToken);
+        await client.WarmupAsync(booking, 2, TestContext.Current.CancellationToken);
+
+        Assert.Equal(new[] { "Skedda-3", "Skedda-2" }, factory.RequestedNames);
+    }
+
+    [Fact]
+    public async Task SkeddaClient_Throws_WhenTheRequestedPipeIsNotRegistered()
+    {
+        // A drift between the registered pipe count and the requested pipe must say so, not silently
+        // POST over an unconfigured, never-warmed connection.
+        var client = new SkeddaClient(
+            new UnregisteredHttpClientFactory(),
+            Microsoft.Extensions.Options.Options.Create(new SkeddaOptions { ApiBaseUrl = "https://example.invalid" }),
+            NullLogger<SkeddaClient>.Instance);
+        var booking = Prepared(BasicDomainConfig(), new BookingSlot(DateTimeOffset.UtcNow));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.BookAsync(booking, 7, TestContext.Current.CancellationToken));
+
+        Assert.Contains("Skedda-7", ex.Message);
+    }
+
+    [Fact]
+    public async Task TryBookOnce_SendsEachShotOnItsOwnPipe()
+    {
+        var skedda = new Mock<ISkeddaClient>();
+        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new SkeddaBookingRejectedException(422, "lost the race"));
+        var useCase = new ExecuteBookingUseCase(
+            skedda.Object,
+            Mock.Of<INotificationSender>(),
+            new InMemoryBookingDeduplicationStore(),
+            Mock.Of<IBookingCancellationLinkRepository>(),
+            Mock.Of<IBookingScheduler>(),
+            NullLogger<ExecuteBookingUseCase>.Instance);
+        var booking = Prepared(BasicDomainConfig(), new BookingSlot(DateTimeOffset.UtcNow));
+
+        // The pipe a shot is given must reach BookAsync verbatim; dropping it would put every shot back
+        // on one connection.
+        foreach (var pipeId in new[] { 0, 1, 5 })
+            Assert.False(await useCase.TryBookOnceAsync(
+                booking, -20, pipeId, CancellationToken.None, CancellationToken.None));
+
+        foreach (var pipeId in new[] { 0, 1, 5 })
+            skedda.Verify(
+                x => x.BookAsync(booking, pipeId, It.IsAny<CancellationToken>()),
+                Times.Once);
+    }
+
     private static UserConfig BasicEntityConfig() => new()
     {
         Id = 1,
@@ -833,6 +939,25 @@ public class UnitTests
         private readonly string _baseUrl;
         public SingleClientHttpClientFactory(string baseUrl) => _baseUrl = baseUrl;
         public HttpClient CreateClient(string name) => new() { BaseAddress = new Uri(_baseUrl) };
+    }
+
+    // Records which named client each call asked for, so a test can pin the shot -> pipe routing.
+    private sealed class RecordingHttpClientFactory : IHttpClientFactory
+    {
+        private readonly string _baseUrl;
+        public RecordingHttpClientFactory(string baseUrl) => _baseUrl = baseUrl;
+        public List<string> RequestedNames { get; } = new();
+        public HttpClient CreateClient(string name)
+        {
+            RequestedNames.Add(name);
+            return new HttpClient { BaseAddress = new Uri(_baseUrl) };
+        }
+    }
+
+    // Mimics IHttpClientFactory handing back a bare client for a name nobody registered.
+    private sealed class UnregisteredHttpClientFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new();
     }
 
     private static BookingCancellationLink BookingLink(

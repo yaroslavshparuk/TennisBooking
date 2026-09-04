@@ -100,11 +100,10 @@ public sealed class PreciseBookingScheduler : IPreciseBookingScheduler, IHostedS
         }
     }
 
-    // Warm EVERY pipe from WarmupLeadTime before the instant, retrying on failure and re-pinging to keep
-    // them alive, until WarmupDeadlineMargin before the target. Each shot fires on its own pipe (a
-    // separate connection pool), so a cold pipe at the instant would make that shot pay a 1-2 s handshake
-    // it can't afford — this proves all of them warm, and samples the host->server clock skew as a
-    // logging-only side effect.
+    // Warm EVERY pipe from WarmupLeadTime before the instant, until WarmupDeadlineMargin before the
+    // target. Each shot fires on its own pipe (a separate connection pool), so a cold pipe at the instant
+    // would make that shot pay a 1-2 s handshake it can't afford — this proves all of them warm, and
+    // samples the host->server clock skew as a logging-only side effect.
     private async Task EnsureWarmConnectionAsync(
         ISkeddaClient skeddaClient,
         PreparedBooking booking,
@@ -119,49 +118,17 @@ public sealed class PreciseBookingScheduler : IPreciseBookingScheduler, IHostedS
         if (warmStart > now)
             await Task.Delay(warmStart - now, token);
 
-        var everEstablished = new bool[pipeCount];
-        TimeSpan? skew = null;
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            var remaining = deadline - DateTimeOffset.UtcNow;
-            if (remaining <= TimeSpan.Zero)
-                break;
+        // Warm the pipes on INDEPENDENT loops, each with its own cadence. A shared loop would couple them
+        // wrongly in both directions: one pipe that keeps failing must not be retried at the slow
+        // keep-alive interval just because a sibling succeeded, and a sibling that is already warm must
+        // not be re-pinged at the fast retry interval just because another pipe is dead. Independent loops
+        // also mean a pipe that hits the deadline mid-probe only loses its own round — the confirmations
+        // and skew samples the other pipes already collected still stand.
+        var pipes = await Task.WhenAll(Enumerable.Range(0, pipeCount)
+            .Select(pipeId => WarmPipeAsync(skeddaClient, booking, pipeId, deadline, token)));
 
-            bool anyEstablishedThisRound;
-            using (var warmupCts = CancellationTokenSource.CreateLinkedTokenSource(token))
-            {
-                warmupCts.CancelAfter(remaining);
-                SkeddaWarmupResult[] results;
-                try
-                {
-                    // Warm all pipes concurrently: each is an independent connection pool, so warming one
-                    // never establishes another. A shot then reuses its own already-open connection.
-                    results = await Task.WhenAll(Enumerable.Range(0, pipeCount)
-                        .Select(pipeId => skeddaClient.WarmupAsync(booking, pipeId, warmupCts.Token)));
-                }
-                catch (OperationCanceledException) when (!token.IsCancellationRequested)
-                {
-                    break; // hit the warm-up deadline; leave time for the burst
-                }
-
-                for (var pipeId = 0; pipeId < pipeCount; pipeId++)
-                {
-                    if (!results[pipeId].Established)
-                        continue;
-                    everEstablished[pipeId] = true;
-                    if (results[pipeId].ClockSkew is { } s)
-                        skew = s;
-                }
-                anyEstablishedThisRound = results.Any(r => r.Established);
-            }
-
-            var pause = anyEstablishedThisRound ? WarmupKeepAliveInterval : WarmupRetryDelay;
-            if (DateTimeOffset.UtcNow + pause >= deadline)
-                break;
-            await Task.Delay(pause, token);
-        }
-
-        var warmed = everEstablished.Count(established => established);
+        var skew = pipes.Select(pipe => pipe.ClockSkew).FirstOrDefault(sample => sample is not null);
+        var warmed = pipes.Count(pipe => pipe.Established);
         if (warmed < pipeCount)
             _logger.LogWarning(
                 "Only {Warmed}/{PipeCount} Skedda pipes confirmed warm before open for {Key}; a shot on a cold pipe may pay a handshake",
@@ -185,6 +152,53 @@ public sealed class PreciseBookingScheduler : IPreciseBookingScheduler, IHostedS
                     sk.TotalMilliseconds,
                     key);
         }
+    }
+
+    // One pipe's warm-up loop: probe until this pipe is established, then keep it alive, up to the
+    // deadline. Cadence is decided per pipe (fast retry while cold, slow keep-alive once warm) and never
+    // from a sibling's outcome. Established/skew accumulate across rounds, so hitting the deadline
+    // mid-probe never discards what earlier rounds already proved about THIS pipe.
+    private async Task<(bool Established, TimeSpan? ClockSkew)> WarmPipeAsync(
+        ISkeddaClient skeddaClient,
+        PreparedBooking booking,
+        int pipeId,
+        DateTimeOffset deadline,
+        CancellationToken token)
+    {
+        var established = false;
+        TimeSpan? skew = null;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            var remaining = deadline - DateTimeOffset.UtcNow;
+            if (remaining <= TimeSpan.Zero)
+                break;
+
+            using (var warmupCts = CancellationTokenSource.CreateLinkedTokenSource(token))
+            {
+                warmupCts.CancelAfter(remaining);
+                try
+                {
+                    var result = await skeddaClient.WarmupAsync(booking, pipeId, warmupCts.Token);
+                    if (result.Established)
+                    {
+                        established = true;
+                        if (result.ClockSkew is { } sample)
+                            skew = sample;
+                    }
+                }
+                catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                {
+                    break; // this pipe hit the warm-up deadline; leave time for the burst
+                }
+            }
+
+            var pause = established ? WarmupKeepAliveInterval : WarmupRetryDelay;
+            if (DateTimeOffset.UtcNow + pause >= deadline)
+                break;
+            await Task.Delay(pause, token);
+        }
+
+        return (established, skew);
     }
 
     // Fire the same booking several times at configured offsets around the open instant so that,
@@ -216,7 +230,8 @@ public sealed class PreciseBookingScheduler : IPreciseBookingScheduler, IHostedS
 
         var shots = offsetsMs
             .Select((offsetMs, index) => FireShotAsync(
-                executeBooking, booking, targetTime, offsetMs, index % pipeCount, burstCts, followUpToken))
+                executeBooking, booking, targetTime, offsetMs, SkeddaBurst.PipeForShot(index, pipeCount),
+                burstCts, followUpToken))
             .ToArray();
         var results = await Task.WhenAll(shots);
         return results.Any(success => success);

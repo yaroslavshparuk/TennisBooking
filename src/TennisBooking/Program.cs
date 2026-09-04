@@ -45,8 +45,9 @@ for (var skeddaPipeId = 0; skeddaPipeId < skeddaPipeCount; skeddaPipeId++)
         var opts = sp.GetRequiredService<IOptions<SkeddaOptions>>().Value;
         client.BaseAddress = new Uri(opts.ApiBaseUrl);
         // Request HTTP/2; the handler negotiates it via ALPN (configured in SslOptions below), and
-        // falls back to HTTP/1.1 if the origin ever stops offering h2. Under h2 the burst's concurrent
-        // POSTs multiplex over a single warm connection.
+        // falls back to HTTP/1.1 if the origin ever stops offering h2. Multiplexing is deliberately NOT
+        // relied on here: this client carries one burst shot, so the shot gets a connection to itself
+        // rather than sharing (and queueing behind) its siblings on one h2 connection.
         client.DefaultRequestVersion = HttpVersion.Version20;
         client.DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
     })
@@ -61,8 +62,8 @@ for (var skeddaPipeId = 0; skeddaPipeId < skeddaPipeCount; skeddaPipeId++)
         // pick up Front Door DNS/IP changes.
         PooledConnectionLifetime = TimeSpan.FromMinutes(10),
         PooledConnectionIdleTimeout = TimeSpan.FromMinutes(5),
-        // Headroom so concurrent same-window bookings never queue for a connection under an HTTP/1.1
-        // fallback; free under HTTP/2 where a connection multiplexes.
+        // Per-pipe headroom: this pool normally holds the single warmed connection its shot uses, so the
+        // spare slots only cover overlapping same-window bookings (several users) and warm-up retries.
         MaxConnectionsPerServer = 10,
         EnableMultipleHttp2Connections = true,
         // Offer h2 (then http/1.1) via ALPN. The handler performs TLS itself over the transport stream

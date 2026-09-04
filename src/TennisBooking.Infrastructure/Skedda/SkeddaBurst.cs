@@ -42,4 +42,11 @@ public static class SkeddaBurst
     /// </summary>
     public static int PipeCount(IReadOnlyList<int>? configuredOffsetsMs)
         => Math.Clamp(ResolveOffsets(configuredOffsetsMs).Length, 1, MaxPipes);
+
+    /// <summary>
+    /// The pipe shot <paramref name="shotIndex"/> fires on. Distinct shots get distinct pipes (the whole
+    /// point of the change: no two shots share a socket) until the burst exceeds
+    /// <see cref="MaxPipes"/>, past which pipes are reused round-robin.
+    /// </summary>
+    public static int PipeForShot(int shotIndex, int pipeCount) => shotIndex % pipeCount;
 }

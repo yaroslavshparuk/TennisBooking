@@ -23,6 +23,22 @@ public sealed class SkeddaClient : ISkeddaClient
     /// <summary>Name of the HttpClient backing pipe <paramref name="pipeId"/> (one connection pool each).</summary>
     public static string PipeClientName(int pipeId) => $"{SkeddaHttpClientName}-{pipeId}";
 
+    /// <summary>
+    /// The pipe's pooled client. IHttpClientFactory hands back a bare, unconfigured HttpClient for a name
+    /// nobody registered, which would send the shot with no BaseAddress over a never-warmed connection —
+    /// so if the registered pipe count and the requested pipe ever drift apart, say exactly that instead
+    /// of failing later as an opaque URI error.
+    /// </summary>
+    private HttpClient PipeClient(int pipeId)
+    {
+        var name = PipeClientName(pipeId);
+        var client = _httpClientFactory.CreateClient(name);
+        if (client.BaseAddress is null)
+            throw new InvalidOperationException(
+                $"HttpClient '{name}' is not registered (no BaseAddress); the registered Skedda pipe count and the requested pipe have drifted apart.");
+        return client;
+    }
+
     private const string AccountLoginPath = "/account/login";
     private const string LoginPath = "/logins";
     private const string GetBookingsPath = "/booking";
@@ -78,7 +94,7 @@ public sealed class SkeddaClient : ISkeddaClient
             booking.UserConfig.Username,
             booking.Slot.StartTime,
             pipeId);
-        var client = _httpClientFactory.CreateClient(PipeClientName(pipeId));
+        var client = PipeClient(pipeId);
 
         using var bookReq = new HttpRequestMessage(HttpMethod.Post, BookingPath)
         {
@@ -124,7 +140,7 @@ public sealed class SkeddaClient : ISkeddaClient
         // Best-effort: never throws except on cancellation.
         try
         {
-            var client = _httpClientFactory.CreateClient(PipeClientName(pipeId));
+            var client = PipeClient(pipeId);
             using var warmReq = new HttpRequestMessage(HttpMethod.Get, AccountLoginPath);
             var sentAt = DateTimeOffset.UtcNow;
             using var warmResp = await client.SendAsync(
@@ -175,7 +191,7 @@ public sealed class SkeddaClient : ISkeddaClient
             booking.UserConfig.Username);
         var session = await CreateSessionAsync(booking.UserConfig, cancellationToken);
 
-        var client = _httpClientFactory.CreateClient(PipeClientName(0));
+        var client = PipeClient(0);
         using var deleteReq = new HttpRequestMessage(HttpMethod.Delete, $"{BookingPath}/{bookingId}");
         deleteReq.Headers.Add(CsrfHeaderName, session.RequestVerificationToken);
         deleteReq.Headers.Add(CookieHeaderName,

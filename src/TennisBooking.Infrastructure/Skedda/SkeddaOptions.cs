@@ -13,15 +13,17 @@ public class SkeddaOptions
     ///
     /// Defaults to empty on purpose: the .NET configuration binder APPENDS bound array items to a
     /// non-empty default, which would make the value un-tunable. Empty here means a configured value
-    /// fully replaces it, and when none is configured the scheduler falls back to its own defaults
-    /// (PreciseBookingScheduler.DefaultBurstOffsetsMs) — the single source of the real defaults.
+    /// fully replaces it, and when none is configured the burst falls back to
+    /// SkeddaBurst.DefaultOffsetsMs — the single source of the real defaults. The NUMBER of offsets also
+    /// decides how many independent connections ("pipes") are registered, one per shot: see
+    /// SkeddaBurst.PipeCount.
     /// </summary>
     public int[] BookingSendOffsetsMs { get; set; } = Array.Empty<int>();
 
     /// <summary>
     /// Deadline for the burst SEND window, measured from the open instant: an attempt whose POST is
     /// still in flight past this point is abandoned. Follow-ups (notification/DB/reminders) run outside
-    /// this deadline. 0 means "use the scheduler default" (see PreciseBookingScheduler.DefaultBurstStopAfterMs).
+    /// this deadline. 0 means "use the burst default" (see SkeddaBurst.DefaultStopAfterMs).
     /// </summary>
     public int BookingSendStopAfterMs { get; set; }
 }
