@@ -179,7 +179,7 @@ public sealed class BookingPostgresIntegrationTests
         });
         var scheduler = new HangfireBookingScheduler(new BackgroundJobClient(storage), Mock.Of<IPreciseBookingScheduler>());
         var skedda = new Mock<ISkeddaClient>();
-        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<CancellationToken>()))
+        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SkeddaBookingResult("skedda-1"));
         var notification = new Mock<INotificationSender>();
         notification.Setup(x => x.NotifyBookingSucceededAsync(It.IsAny<BookingUserConfig>(), It.IsAny<BookingSlot>(), It.IsAny<CancellationToken>()))

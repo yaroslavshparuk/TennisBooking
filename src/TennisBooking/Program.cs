@@ -31,12 +31,16 @@ builder.Services.Configure<SkeddaOptions>(skeddaConfig);
 builder.Services.Configure<TelegramOptions>(telegramConfig);
 builder.Services.AddHttpClient<TelegramNotificationSender>();
 
-// Pooled, keep-alive HttpClient for the latency-critical Skedda booking POST.
-// IHttpClientFactory caches a single SocketsHttpHandler for this named client and reuses it
-// across every CreateClient call and across DI scopes, so the TCP+TLS connection established
-// during the pre-warm window (see PreciseBookingScheduler) is still open at the target instant
-// instead of a fresh handshake being paid on the hot path.
-builder.Services.AddHttpClient(SkeddaClient.SkeddaHttpClientName, (sp, client) =>
+// Pooled, keep-alive HttpClients for the latency-critical Skedda booking POST — one per burst "pipe".
+// The burst spreads its shots across several INDEPENDENT connections so shot i never shares a TCP/HTTP-2
+// connection with shot j: each pipe is its own named client with its own SocketsHttpHandler (hence its
+// own connection pool), warmed separately during the pre-warm window (see PreciseBookingScheduler).
+// IHttpClientFactory caches each handler and reuses it across CreateClient calls and DI scopes, so the
+// connection established during warm-up is still open at the target instant. One pipe per burst shot.
+var skeddaPipeCount = SkeddaBurst.PipeCount(skeddaConfig.GetSection("BookingSendOffsetsMs").Get<int[]>());
+for (var skeddaPipeId = 0; skeddaPipeId < skeddaPipeCount; skeddaPipeId++)
+{
+    builder.Services.AddHttpClient(SkeddaClient.PipeClientName(skeddaPipeId), (sp, client) =>
     {
         var opts = sp.GetRequiredService<IOptions<SkeddaOptions>>().Value;
         client.BaseAddress = new Uri(opts.ApiBaseUrl);
@@ -91,6 +95,7 @@ builder.Services.AddHttpClient(SkeddaClient.SkeddaHttpClientName, (sp, client) =
             }
         }
     });
+}
 
 var connString = builder.Configuration.GetConnectionString("Default")
                  ?? throw new InvalidOperationException("Connection string 'Default' not found.");

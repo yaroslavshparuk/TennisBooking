@@ -24,11 +24,6 @@ public sealed class PreciseBookingScheduler : IPreciseBookingScheduler, IHostedS
     // Above this measured (coarse) skew, warn that the host clock likely needs NTP attention.
     private const double GrossClockSkewWarnMs = 2000;
 
-    // Single source of the burst defaults, used when config supplies none. Kept in sync with the
-    // documented values (the SkeddaOptions properties default to empty so config can override cleanly).
-    private static readonly int[] DefaultBurstOffsetsMs = { -90, -60, -30, 0 };
-    private const int DefaultBurstStopAfterMs = 1500;
-
     private readonly ConcurrentDictionary<string, byte> _scheduled = new();
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly SkeddaOptions _options;
@@ -71,6 +66,7 @@ public sealed class PreciseBookingScheduler : IPreciseBookingScheduler, IHostedS
         try
         {
             var targetTime = booking.Slot.BookingOpensAt.ToUniversalTime();
+            var pipeCount = SkeddaBurst.PipeCount(_options.BookingSendOffsetsMs);
             using var scope = _scopeFactory.CreateScope();
             var skeddaClient = scope.ServiceProvider.GetRequiredService<ISkeddaClient>();
 
@@ -79,10 +75,10 @@ public sealed class PreciseBookingScheduler : IPreciseBookingScheduler, IHostedS
             // Date header is second-resolution, so a correct local clock can still show up to ~1s of
             // apparent skew (quantization) — larger than the tuned offsets, so correcting on it would
             // hurt. Keep the host clock NTP-synced; we only surface a grossly wrong clock to fix at OS level.
-            await EnsureWarmConnectionAsync(skeddaClient, booking, targetTime, key, token);
+            await EnsureWarmConnectionAsync(skeddaClient, booking, targetTime, pipeCount, key, token);
 
             var executeBooking = scope.ServiceProvider.GetRequiredService<ExecuteBookingUseCase>();
-            var booked = await RunBookingBurstAsync(executeBooking, booking, targetTime, token);
+            var booked = await RunBookingBurstAsync(executeBooking, booking, targetTime, pipeCount, token);
             if (booked)
                 _logger.LogInformation("Precise burst booked slot for {Username} at {Target}", booking.UserConfig.Username, targetTime);
             else if (token.IsCancellationRequested)
@@ -104,14 +100,16 @@ public sealed class PreciseBookingScheduler : IPreciseBookingScheduler, IHostedS
         }
     }
 
-    // Warm the pooled connection from WarmupLeadTime before the instant, retrying on failure and
-    // re-pinging to keep it alive, until WarmupDeadlineMargin before the target. Returns the freshest
-    // estimated host->server clock skew (or null). A cold connection at the instant costs 1-2 s, so
-    // this exists to make the booking POST never pay that handshake.
+    // Warm EVERY pipe from WarmupLeadTime before the instant, retrying on failure and re-pinging to keep
+    // them alive, until WarmupDeadlineMargin before the target. Each shot fires on its own pipe (a
+    // separate connection pool), so a cold pipe at the instant would make that shot pay a 1-2 s handshake
+    // it can't afford — this proves all of them warm, and samples the host->server clock skew as a
+    // logging-only side effect.
     private async Task EnsureWarmConnectionAsync(
         ISkeddaClient skeddaClient,
         PreparedBooking booking,
         DateTimeOffset targetTime,
+        int pipeCount,
         string key,
         CancellationToken token)
     {
@@ -121,7 +119,7 @@ public sealed class PreciseBookingScheduler : IPreciseBookingScheduler, IHostedS
         if (warmStart > now)
             await Task.Delay(warmStart - now, token);
 
-        var established = false;
+        var everEstablished = new bool[pipeCount];
         TimeSpan? skew = null;
         while (DateTimeOffset.UtcNow < deadline)
         {
@@ -129,36 +127,51 @@ public sealed class PreciseBookingScheduler : IPreciseBookingScheduler, IHostedS
             if (remaining <= TimeSpan.Zero)
                 break;
 
-            SkeddaWarmupResult result;
+            bool anyEstablishedThisRound;
             using (var warmupCts = CancellationTokenSource.CreateLinkedTokenSource(token))
             {
                 warmupCts.CancelAfter(remaining);
+                SkeddaWarmupResult[] results;
                 try
                 {
-                    result = await skeddaClient.WarmupAsync(booking, warmupCts.Token);
+                    // Warm all pipes concurrently: each is an independent connection pool, so warming one
+                    // never establishes another. A shot then reuses its own already-open connection.
+                    results = await Task.WhenAll(Enumerable.Range(0, pipeCount)
+                        .Select(pipeId => skeddaClient.WarmupAsync(booking, pipeId, warmupCts.Token)));
                 }
                 catch (OperationCanceledException) when (!token.IsCancellationRequested)
                 {
                     break; // hit the warm-up deadline; leave time for the burst
                 }
+
+                for (var pipeId = 0; pipeId < pipeCount; pipeId++)
+                {
+                    if (!results[pipeId].Established)
+                        continue;
+                    everEstablished[pipeId] = true;
+                    if (results[pipeId].ClockSkew is { } s)
+                        skew = s;
+                }
+                anyEstablishedThisRound = results.Any(r => r.Established);
             }
 
-            if (result.Established)
-            {
-                established = true;
-                if (result.ClockSkew is { } s)
-                    skew = s;
-            }
-
-            var pause = result.Established ? WarmupKeepAliveInterval : WarmupRetryDelay;
+            var pause = anyEstablishedThisRound ? WarmupKeepAliveInterval : WarmupRetryDelay;
             if (DateTimeOffset.UtcNow + pause >= deadline)
                 break;
             await Task.Delay(pause, token);
         }
 
-        if (!established)
+        var warmed = everEstablished.Count(established => established);
+        if (warmed < pipeCount)
             _logger.LogWarning(
-                "Skedda connection not confirmed warm before open for {Key}; a shot may pay a cold handshake",
+                "Only {Warmed}/{PipeCount} Skedda pipes confirmed warm before open for {Key}; a shot on a cold pipe may pay a handshake",
+                warmed,
+                pipeCount,
+                key);
+        else
+            _logger.LogInformation(
+                "All {PipeCount} Skedda pipes confirmed warm before open for {Key}",
+                pipeCount,
                 key);
         if (skew is { } sk)
         {
@@ -181,13 +194,11 @@ public sealed class PreciseBookingScheduler : IPreciseBookingScheduler, IHostedS
         ExecuteBookingUseCase executeBooking,
         PreparedBooking booking,
         DateTimeOffset targetTime,
+        int pipeCount,
         CancellationToken followUpToken)
     {
-        var offsetsMs = (_options.BookingSendOffsetsMs is { Length: > 0 } configured ? configured : DefaultBurstOffsetsMs)
-            .Distinct()
-            .OrderBy(ms => ms)
-            .ToArray();
-        var stopAfterMs = _options.BookingSendStopAfterMs > 0 ? _options.BookingSendStopAfterMs : DefaultBurstStopAfterMs;
+        var offsetsMs = SkeddaBurst.ResolveOffsets(_options.BookingSendOffsetsMs);
+        var stopAfterMs = _options.BookingSendStopAfterMs > 0 ? _options.BookingSendStopAfterMs : SkeddaBurst.DefaultStopAfterMs;
 
         using var burstCts = CancellationTokenSource.CreateLinkedTokenSource(followUpToken);
         var hardStopIn = targetTime + TimeSpan.FromMilliseconds(stopAfterMs) - DateTimeOffset.UtcNow;
@@ -199,12 +210,13 @@ public sealed class PreciseBookingScheduler : IPreciseBookingScheduler, IHostedS
                 "Burst woke {LateMs:F0} ms after open for user {Username}; firing one immediate attempt",
                 -hardStopIn.TotalMilliseconds,
                 booking.UserConfig.Username);
-            return await executeBooking.TryBookOnceAsync(booking, 0, followUpToken, followUpToken);
+            return await executeBooking.TryBookOnceAsync(booking, 0, 0, followUpToken, followUpToken);
         }
         burstCts.CancelAfter(hardStopIn);
 
         var shots = offsetsMs
-            .Select(offsetMs => FireShotAsync(executeBooking, booking, targetTime, offsetMs, burstCts, followUpToken))
+            .Select((offsetMs, index) => FireShotAsync(
+                executeBooking, booking, targetTime, offsetMs, index % pipeCount, burstCts, followUpToken))
             .ToArray();
         var results = await Task.WhenAll(shots);
         return results.Any(success => success);
@@ -215,6 +227,7 @@ public sealed class PreciseBookingScheduler : IPreciseBookingScheduler, IHostedS
         PreparedBooking booking,
         DateTimeOffset targetTime,
         int offsetMs,
+        int pipeId,
         CancellationTokenSource burstCts,
         CancellationToken followUpToken)
     {
@@ -228,7 +241,7 @@ public sealed class PreciseBookingScheduler : IPreciseBookingScheduler, IHostedS
             // follow-ups on the outer token; and stop the remaining shots the instant this one claims
             // the slot — before those (slower) follow-ups run.
             return await executeBooking.TryBookOnceAsync(
-                booking, offsetMs, burstCts.Token, followUpToken, () => burstCts.Cancel());
+                booking, offsetMs, pipeId, burstCts.Token, followUpToken, () => burstCts.Cancel());
         }
         catch (OperationCanceledException)
         {

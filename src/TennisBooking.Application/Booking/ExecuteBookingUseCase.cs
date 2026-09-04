@@ -52,7 +52,7 @@ public sealed class ExecuteBookingUseCase
                 booking.UserConfig.ResourceId,
                 booking.Slot.StartTime);
 
-            var bookResult = await _skeddaClient.BookAsync(booking, cancellationToken);
+            var bookResult = await _skeddaClient.BookAsync(booking, 0, cancellationToken);
             await HandleBookingSucceededAsync(booking, bookResult, cancellationToken);
         }
         catch (Exception ex)
@@ -84,6 +84,7 @@ public sealed class ExecuteBookingUseCase
     public async Task<bool> TryBookOnceAsync(
         PreparedBooking booking,
         int offsetMs,
+        int pipeId,
         CancellationToken sendToken,
         CancellationToken followUpToken,
         Action? onBooked = null)
@@ -96,7 +97,7 @@ public sealed class ExecuteBookingUseCase
         SkeddaBookingResult bookResult;
         try
         {
-            bookResult = await _skeddaClient.BookAsync(booking, sendToken);
+            bookResult = await _skeddaClient.BookAsync(booking, pipeId, sendToken);
             elapsed.Stop();
         }
         catch (OperationCanceledException)
@@ -106,8 +107,9 @@ public sealed class ExecuteBookingUseCase
             // it rather than letting it disappear and under-report how many requests the burst sent.
             elapsed.Stop();
             _logger.LogInformation(
-                "Burst shot at offset {OffsetMs} ms cancelled in flight after {ElapsedMs:F0} ms for user {Username}, slot {SlotStart}; request was sent and its outcome at Skedda is unknown",
+                "Burst shot at offset {OffsetMs} ms on pipe {PipeId} cancelled in flight after {ElapsedMs:F0} ms for user {Username}, slot {SlotStart}; request was sent and its outcome at Skedda is unknown",
                 offsetMs,
+                pipeId,
                 elapsed.Elapsed.TotalMilliseconds,
                 booking.UserConfig.Username,
                 booking.Slot.StartTime);
@@ -118,8 +120,9 @@ public sealed class ExecuteBookingUseCase
             // Expected: this shot lost the race or arrived before the slot opened.
             elapsed.Stop();
             _logger.LogInformation(
-                "Burst shot at offset {OffsetMs} ms was rejected (expected) with status {StatusCode} after {RttMs:F0} ms for user {Username}, slot {SlotStart}: {Reason}",
+                "Burst shot at offset {OffsetMs} ms on pipe {PipeId} was rejected (expected) with status {StatusCode} after {RttMs:F0} ms for user {Username}, slot {SlotStart}: {Reason}",
                 offsetMs,
+                pipeId,
                 ex.StatusCode,
                 elapsed.Elapsed.TotalMilliseconds,
                 booking.UserConfig.Username,
@@ -134,8 +137,9 @@ public sealed class ExecuteBookingUseCase
             elapsed.Stop();
             _logger.LogWarning(
                 ex,
-                "Burst shot at offset {OffsetMs} ms failed unexpectedly with status {StatusCode} after {RttMs:F0} ms for user {Username}, slot {SlotStart}",
+                "Burst shot at offset {OffsetMs} ms on pipe {PipeId} failed unexpectedly with status {StatusCode} after {RttMs:F0} ms for user {Username}, slot {SlotStart}",
                 offsetMs,
+                pipeId,
                 (ex as HttpRequestException)?.StatusCode is { } s ? ((int)s).ToString() : "n/a",
                 elapsed.Elapsed.TotalMilliseconds,
                 booking.UserConfig.Username,
@@ -149,8 +153,9 @@ public sealed class ExecuteBookingUseCase
             // Another shot already claimed the slot. This shot's POST also succeeded, so a second
             // booking may now exist on Skedda that we do not track — surface it loudly.
             _logger.LogWarning(
-                "Burst shot at offset {OffsetMs} ms also booked slot (id {SkeddaBookingId}, status {StatusCode}, rtt {RttMs:F0} ms) but another shot already claimed {BookingKey}; this duplicate booking is untracked (no cancellation link/reminders)",
+                "Burst shot at offset {OffsetMs} ms on pipe {PipeId} also booked slot (id {SkeddaBookingId}, status {StatusCode}, rtt {RttMs:F0} ms) but another shot already claimed {BookingKey}; this duplicate booking is untracked (no cancellation link/reminders)",
                 offsetMs,
+                pipeId,
                 bookResult.BookingId,
                 bookResult.StatusCode,
                 elapsed.Elapsed.TotalMilliseconds,
@@ -161,8 +166,9 @@ public sealed class ExecuteBookingUseCase
         // Slot is ours. Stop the remaining shots NOW, before the (slower) follow-ups run.
         onBooked?.Invoke();
         _logger.LogInformation(
-            "Burst shot at offset {OffsetMs} ms won the booking with status {StatusCode} after {RttMs:F0} ms for user {Username}, slot {SlotStart}",
+            "Burst shot at offset {OffsetMs} ms on pipe {PipeId} won the booking with status {StatusCode} after {RttMs:F0} ms for user {Username}, slot {SlotStart}",
             offsetMs,
+            pipeId,
             bookResult.StatusCode,
             elapsed.Elapsed.TotalMilliseconds,
             booking.UserConfig.Username,

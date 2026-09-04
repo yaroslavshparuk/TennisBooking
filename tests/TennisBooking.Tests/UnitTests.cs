@@ -68,7 +68,7 @@ public class UnitTests
     public async Task ExecuteBooking_DoesNotPostTwice_ForSameSlot()
     {
         var skedda = new Mock<ISkeddaClient>();
-        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<CancellationToken>()))
+        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SkeddaBookingResult("1"));
         var notification = new Mock<INotificationSender>();
         notification.Setup(x => x.NotifyBookingSucceededAsync(It.IsAny<BookingUserConfig>(), It.IsAny<BookingSlot>(), It.IsAny<CancellationToken>()))
@@ -85,7 +85,7 @@ public class UnitTests
         await useCase.ExecuteAsync(booking, CancellationToken.None);
         await useCase.ExecuteAsync(booking, CancellationToken.None);
 
-        skedda.Verify(x => x.BookAsync(booking, It.IsAny<CancellationToken>()), Times.Once);
+        skedda.Verify(x => x.BookAsync(booking, It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
         notification.Verify(x => x.NotifyBookingSucceededAsync(booking.UserConfig, booking.Slot, It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -93,7 +93,7 @@ public class UnitTests
     public async Task TryBookOnce_Succeeds_RunsFollowUpsExactlyOnce_AcrossBurstShots()
     {
         var skedda = new Mock<ISkeddaClient>();
-        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<CancellationToken>()))
+        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SkeddaBookingResult("1"));
         var notification = new Mock<INotificationSender>();
         notification.Setup(x => x.NotifyBookingSucceededAsync(It.IsAny<BookingUserConfig>(), It.IsAny<BookingSlot>(), It.IsAny<CancellationToken>()))
@@ -108,12 +108,12 @@ public class UnitTests
         var booking = Prepared(BasicDomainConfig(), new BookingSlot(new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero)));
 
         // Two sequential burst shots that both reach Skedda successfully.
-        var first = await useCase.TryBookOnceAsync(booking, -60, CancellationToken.None, CancellationToken.None);
-        var second = await useCase.TryBookOnceAsync(booking, -30, CancellationToken.None, CancellationToken.None);
+        var first = await useCase.TryBookOnceAsync(booking, -60, 0, CancellationToken.None, CancellationToken.None);
+        var second = await useCase.TryBookOnceAsync(booking, -30, 0, CancellationToken.None, CancellationToken.None);
 
         Assert.True(first);
         Assert.True(second);
-        skedda.Verify(x => x.BookAsync(booking, It.IsAny<CancellationToken>()), Times.Exactly(2));
+        skedda.Verify(x => x.BookAsync(booking, It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
         // Follow-ups (notification, reminders, cancellation link) run once even if two shots succeed.
         notification.Verify(x => x.NotifyBookingSucceededAsync(booking.UserConfig, booking.Slot, It.IsAny<CancellationToken>()), Times.Once);
     }
@@ -122,7 +122,7 @@ public class UnitTests
     public async Task TryBookOnce_ReturnsFalseWithoutThrowing_WhenSkeddaRejects()
     {
         var skedda = new Mock<ISkeddaClient>();
-        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<CancellationToken>()))
+        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new SkeddaBookingRejectedException(409, "conflicts with one already scheduled"));
         var notification = new Mock<INotificationSender>();
         var useCase = new ExecuteBookingUseCase(
@@ -134,7 +134,7 @@ public class UnitTests
             NullLogger<ExecuteBookingUseCase>.Instance);
         var booking = Prepared(BasicDomainConfig(), new BookingSlot(new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero)));
 
-        var result = await useCase.TryBookOnceAsync(booking, -30, CancellationToken.None, CancellationToken.None);
+        var result = await useCase.TryBookOnceAsync(booking, -30, 0, CancellationToken.None, CancellationToken.None);
 
         Assert.False(result);
         notification.Verify(
@@ -146,7 +146,7 @@ public class UnitTests
     public async Task TryBookOnce_LaterShotSucceeds_AfterEarlierShotRejected()
     {
         var skedda = new Mock<ISkeddaClient>();
-        skedda.SetupSequence(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<CancellationToken>()))
+        skedda.SetupSequence(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new SkeddaBookingRejectedException(422, "slot not open yet"))
             .ReturnsAsync(new SkeddaBookingResult("1"));
         var notification = new Mock<INotificationSender>();
@@ -162,8 +162,8 @@ public class UnitTests
         var booking = Prepared(BasicDomainConfig(), new BookingSlot(new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero)));
 
         // An early shot that lands before the slot opens must not consume the success latch.
-        Assert.False(await useCase.TryBookOnceAsync(booking, -90, CancellationToken.None, CancellationToken.None));
-        Assert.True(await useCase.TryBookOnceAsync(booking, -30, CancellationToken.None, CancellationToken.None));
+        Assert.False(await useCase.TryBookOnceAsync(booking, -90, 0, CancellationToken.None, CancellationToken.None));
+        Assert.True(await useCase.TryBookOnceAsync(booking, -30, 0, CancellationToken.None, CancellationToken.None));
         notification.Verify(x => x.NotifyBookingSucceededAsync(booking.UserConfig, booking.Slot, It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -172,7 +172,7 @@ public class UnitTests
     {
         var skedda = new Mock<ISkeddaClient>();
         var bookCalls = 0;
-        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<CancellationToken>()))
+        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .Returns(async () =>
             {
                 Interlocked.Increment(ref bookCalls);
@@ -193,7 +193,7 @@ public class UnitTests
 
         // Fire four shots concurrently, the way the burst actually invokes them.
         var results = await Task.WhenAll(new[] { -90, -60, -30, 0 }.Select(o =>
-            useCase.TryBookOnceAsync(booking, o, CancellationToken.None, CancellationToken.None)));
+            useCase.TryBookOnceAsync(booking, o, 0, CancellationToken.None, CancellationToken.None)));
 
         Assert.All(results, Assert.True);
         Assert.Equal(4, bookCalls);
@@ -205,7 +205,7 @@ public class UnitTests
     public async Task TryBookOnce_FollowUpFailure_StillReportsBookingAndDoesNotThrow()
     {
         var skedda = new Mock<ISkeddaClient>();
-        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<CancellationToken>()))
+        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SkeddaBookingResult("1"));
         var notification = new Mock<INotificationSender>();
         notification.Setup(x => x.NotifyBookingSucceededAsync(It.IsAny<BookingUserConfig>(), It.IsAny<BookingSlot>(), It.IsAny<CancellationToken>()))
@@ -220,7 +220,7 @@ public class UnitTests
         var booking = Prepared(BasicDomainConfig(), new BookingSlot(new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero)));
 
         // The booking exists on Skedda; a follow-up failure must not throw or be reported as a miss.
-        var result = await useCase.TryBookOnceAsync(booking, 0, CancellationToken.None, CancellationToken.None);
+        var result = await useCase.TryBookOnceAsync(booking, 0, 0, CancellationToken.None, CancellationToken.None);
 
         Assert.True(result);
     }
@@ -229,7 +229,7 @@ public class UnitTests
     public async Task TryBookOnce_UnexpectedError_ReturnsFalseWithoutThrowing()
     {
         var skedda = new Mock<ISkeddaClient>();
-        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<CancellationToken>()))
+        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Skedda booking failed with status 500"));
         var notification = new Mock<INotificationSender>();
         var useCase = new ExecuteBookingUseCase(
@@ -241,7 +241,7 @@ public class UnitTests
             NullLogger<ExecuteBookingUseCase>.Instance);
         var booking = Prepared(BasicDomainConfig(), new BookingSlot(new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero)));
 
-        var result = await useCase.TryBookOnceAsync(booking, 0, CancellationToken.None, CancellationToken.None);
+        var result = await useCase.TryBookOnceAsync(booking, 0, 0, CancellationToken.None, CancellationToken.None);
 
         Assert.False(result);
         notification.Verify(
@@ -253,7 +253,7 @@ public class UnitTests
     public async Task ExecuteBooking_SkipsTelegramFollowUps_WhenNotificationWasNotSent()
     {
         var skedda = new Mock<ISkeddaClient>();
-        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<CancellationToken>()))
+        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SkeddaBookingResult("1"));
         var notification = new Mock<INotificationSender>();
         notification.Setup(x => x.NotifyBookingSucceededAsync(It.IsAny<BookingUserConfig>(), It.IsAny<BookingSlot>(), It.IsAny<CancellationToken>()))
@@ -294,7 +294,7 @@ public class UnitTests
     public async Task ExecuteBooking_PersistsScheduledReminderJobIds()
     {
         var skedda = new Mock<ISkeddaClient>();
-        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<CancellationToken>()))
+        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SkeddaBookingResult("1"));
         var notification = new Mock<INotificationSender>();
         notification.Setup(x => x.NotifyBookingSucceededAsync(It.IsAny<BookingUserConfig>(), It.IsAny<BookingSlot>(), It.IsAny<CancellationToken>()))
@@ -328,7 +328,7 @@ public class UnitTests
     public async Task ExecuteBooking_DeletesReminderScheduledAfterCancellation()
     {
         var skedda = new Mock<ISkeddaClient>();
-        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<CancellationToken>()))
+        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SkeddaBookingResult("1"));
         var notification = new Mock<INotificationSender>();
         notification.Setup(x => x.NotifyBookingSucceededAsync(It.IsAny<BookingUserConfig>(), It.IsAny<BookingSlot>(), It.IsAny<CancellationToken>()))
@@ -365,7 +365,7 @@ public class UnitTests
         await db.SaveChangesAsync();
 
         var skedda = new Mock<ISkeddaClient>();
-        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<CancellationToken>()))
+        skedda.Setup(x => x.BookAsync(It.IsAny<PreparedBooking>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SkeddaBookingResult("1"));
         var notification = new Mock<INotificationSender>();
         notification.Setup(x => x.NotifyBookingSucceededAsync(It.IsAny<BookingUserConfig>(), It.IsAny<BookingSlot>(), It.IsAny<CancellationToken>()))
@@ -384,7 +384,7 @@ public class UnitTests
 
         await fallback.ExecuteAsync(entity.Id, prepared.Slot.StartTime, CancellationToken.None);
 
-        skedda.Verify(x => x.BookAsync(prepared, It.IsAny<CancellationToken>()), Times.Once);
+        skedda.Verify(x => x.BookAsync(prepared, It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -597,7 +597,7 @@ public class UnitTests
             NullLogger<SkeddaClient>.Instance);
         var booking = Prepared(BasicDomainConfig(), new BookingSlot(DateTimeOffset.UtcNow));
 
-        await client.BookAsync(booking, CancellationToken.None);
+        await client.BookAsync(booking, 0, CancellationToken.None);
 
         Assert.Equal(1, bookingPosts);
     }
@@ -630,7 +630,7 @@ public class UnitTests
             NullLogger<SkeddaClient>.Instance);
         var booking = Prepared(BasicDomainConfig(), new BookingSlot(DateTimeOffset.UtcNow));
 
-        var result = await client.WarmupAsync(booking, CancellationToken.None);
+        var result = await client.WarmupAsync(booking, 0, CancellationToken.None);
 
         Assert.True(result.Established);
     }
