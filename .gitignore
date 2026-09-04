@@ -366,3 +366,5 @@ FodyWeavers.xsd
 #Rider
 **/.idea/*
 *.csproj.DotSettings
+# Claude Code local settings (may contain machine-specific config)
+.claude/settings.local.json
