@@ -21,6 +21,7 @@ using TennisBooking.Infrastructure.Persistence;
 using TennisBooking.Infrastructure.Scheduling;
 using TennisBooking.Infrastructure.Skedda;
 using TennisBooking.Infrastructure.Telegram;
+using TennisBooking.Infrastructure.Weather;
 using TennisBooking.Options;
 using Xunit;
 
@@ -463,7 +464,11 @@ public class UnitTests
         links.Setup(x => x.TryMarkReminderSentAsync(5, 10, AttendanceReminderUseCase.ReminderType24h, It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
         var notification = new Mock<INotificationSender>();
-        var useCase = new AttendanceReminderUseCase(links.Object, notification.Object, NullLogger<AttendanceReminderUseCase>.Instance);
+        var useCase = new AttendanceReminderUseCase(
+            links.Object,
+            notification.Object,
+            StubWeather(null),
+            NullLogger<AttendanceReminderUseCase>.Instance);
 
         await useCase.ExecuteAsync(5, 10, AttendanceReminderUseCase.ReminderType24h, CancellationToken.None);
 
@@ -493,12 +498,200 @@ public class UnitTests
         var links = new Mock<IBookingCancellationLinkRepository>();
         links.Setup(x => x.GetByMessageAsync(5, 10, It.IsAny<CancellationToken>())).ReturnsAsync(link);
         var notification = new Mock<INotificationSender>();
-        var useCase = new AttendanceReminderUseCase(links.Object, notification.Object, NullLogger<AttendanceReminderUseCase>.Instance);
+        var useCase = new AttendanceReminderUseCase(
+            links.Object,
+            notification.Object,
+            StubWeather(null),
+            NullLogger<AttendanceReminderUseCase>.Instance);
 
         await useCase.ExecuteAsync(5, 10, AttendanceReminderUseCase.ReminderType2h, CancellationToken.None);
 
         notification.Verify(x => x.NotifyMessageAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<int?>()), Times.Never);
         links.Verify(x => x.TryMarkReminderSentAsync(It.IsAny<long>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task AttendanceReminder_AppendsRainForecast_ForTheSlotStartHour()
+    {
+        var slotStart = new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero);
+        var links = ActiveLinkRepository(slotStart, AttendanceReminderUseCase.ReminderType24h);
+        var notification = new Mock<INotificationSender>();
+        var weather = new Mock<IWeatherForecastProvider>();
+        weather.Setup(x => x.GetForecastAsync(slotStart, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new WeatherForecast(11.6, 70, 1.4, true));
+        var useCase = new AttendanceReminderUseCase(
+            links.Object,
+            notification.Object,
+            weather.Object,
+            NullLogger<AttendanceReminderUseCase>.Instance);
+
+        await useCase.ExecuteAsync(5, 10, AttendanceReminderUseCase.ReminderType24h, CancellationToken.None);
+
+        notification.Verify(
+            x => x.NotifyMessageAsync(
+                It.Is<string>(text =>
+                    text.Contains("завтра корт заброньований", StringComparison.Ordinal)
+                    && text.Contains("очікується дощ (ймовірність 70%)", StringComparison.Ordinal)
+                    && text.Contains("+12°C", StringComparison.Ordinal)),
+                It.IsAny<CancellationToken>(),
+                10),
+            Times.Once);
+        // The forecast is asked for the hour the game starts, not for the moment the reminder runs.
+        weather.Verify(x => x.GetForecastAsync(slotStart, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task AttendanceReminder_AppendsDryForecast_WhenNoRainExpected()
+    {
+        var slotStart = new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero);
+        var links = ActiveLinkRepository(slotStart, AttendanceReminderUseCase.ReminderType2h);
+        var notification = new Mock<INotificationSender>();
+        var useCase = new AttendanceReminderUseCase(
+            links.Object,
+            notification.Object,
+            StubWeather(new WeatherForecast(18.2, 5, 0, false)),
+            NullLogger<AttendanceReminderUseCase>.Instance);
+
+        await useCase.ExecuteAsync(5, 10, AttendanceReminderUseCase.ReminderType2h, CancellationToken.None);
+
+        notification.Verify(
+            x => x.NotifyMessageAsync(
+                It.Is<string>(text =>
+                    text.Contains("гра вже за 2 години", StringComparison.Ordinal)
+                    && text.Contains("дощу не очікується", StringComparison.Ordinal)
+                    && text.Contains("+18°C", StringComparison.Ordinal)),
+                It.IsAny<CancellationToken>(),
+                10),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task AttendanceReminder_SendsWithoutForecast_WhenLookupFails()
+    {
+        var slotStart = new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero);
+        var links = ActiveLinkRepository(slotStart, AttendanceReminderUseCase.ReminderType24h);
+        var notification = new Mock<INotificationSender>();
+        var weather = new Mock<IWeatherForecastProvider>();
+        weather.Setup(x => x.GetForecastAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("open-meteo is down"));
+        var useCase = new AttendanceReminderUseCase(
+            links.Object,
+            notification.Object,
+            weather.Object,
+            NullLogger<AttendanceReminderUseCase>.Instance);
+
+        await useCase.ExecuteAsync(5, 10, AttendanceReminderUseCase.ReminderType24h, CancellationToken.None);
+
+        // A weather outage degrades the reminder, it never cancels or fails it.
+        notification.Verify(
+            x => x.NotifyMessageAsync(
+                It.Is<string>(text =>
+                    text.Contains("завтра корт заброньований", StringComparison.Ordinal)
+                    && !text.Contains("Погода", StringComparison.Ordinal)),
+                It.IsAny<CancellationToken>(),
+                10),
+            Times.Once);
+        links.Verify(x => x.TryMarkReminderSentAsync(5, 10, AttendanceReminderUseCase.ReminderType24h, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task OpenMeteoWeatherForecastProvider_ReadsTheHourTheBookingStartsIn()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        Uri? requested = null;
+        var handler = new DelegateHandler((req, _) =>
+        {
+            requested = req.RequestUri;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"hourly":{"time":[1907744400,1907748000],"temperature_2m":[9.9,11.4],"precipitation_probability":[10,80],"precipitation":[0.0,1.2]}}""",
+                    Encoding.UTF8,
+                    "application/json")
+            });
+        });
+        var provider = new OpenMeteoWeatherForecastProvider(
+            new HttpClient(handler),
+            Microsoft.Extensions.Options.Options.Create(new WeatherOptions()),
+            NullLogger<OpenMeteoWeatherForecastProvider>.Instance);
+
+        // 1907748000 = 2030-06-15T10:00:00Z; the minutes are dropped so the containing hour is used.
+        var forecast = await provider.GetForecastAsync(
+            new DateTimeOffset(2030, 6, 15, 10, 42, 0, TimeSpan.Zero),
+            cancellationToken);
+
+        Assert.NotNull(forecast);
+        Assert.Equal(11.4, forecast.TemperatureC);
+        Assert.Equal(80, forecast.PrecipitationProbabilityPercent);
+        Assert.Equal(1.2, forecast.PrecipitationMm);
+        Assert.True(forecast.IsRainExpected);
+        var query = requested!.Query;
+        Assert.Contains("start_hour=2030-06-15T10%3A00", query, StringComparison.Ordinal);
+        Assert.Contains("end_hour=2030-06-15T11%3A00", query, StringComparison.Ordinal);
+        Assert.Contains("timeformat=unixtime", query, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task OpenMeteoWeatherForecastProvider_FlagsRain_FromAccumulationAloneAndReportsDryOtherwise()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var provider = ProviderReturning(
+            """{"hourly":{"time":[1907748000],"temperature_2m":[14.0],"precipitation_probability":[15],"precipitation":[0.6]}}""");
+
+        var rainy = await provider.GetForecastAsync(new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero), cancellationToken);
+
+        // 15% is below the probability threshold, but 0.6 mm is above the accumulation one.
+        Assert.True(rainy!.IsRainExpected);
+
+        var dry = await ProviderReturning(
+                """{"hourly":{"time":[1907748000],"temperature_2m":[14.0],"precipitation_probability":null,"precipitation":[0.0]}}""")
+            .GetForecastAsync(new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero), cancellationToken);
+
+        // A null probability array contributes nothing rather than failing the lookup.
+        Assert.False(dry!.IsRainExpected);
+        Assert.Equal(0, dry.PrecipitationProbabilityPercent);
+    }
+
+    [Fact]
+    public async Task OpenMeteoWeatherForecastProvider_ReturnsNull_WhenDisabledOrHourMissing()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var at = new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero);
+
+        var disabled = new OpenMeteoWeatherForecastProvider(
+            new HttpClient(new DelegateHandler((_, _) => throw new InvalidOperationException("must not be called"))),
+            Microsoft.Extensions.Options.Options.Create(new WeatherOptions { Enabled = false }),
+            NullLogger<OpenMeteoWeatherForecastProvider>.Instance);
+        Assert.Null(await disabled.GetForecastAsync(at, cancellationToken));
+
+        // Hour outside the response, and a response with no hourly block at all.
+        Assert.Null(await ProviderReturning(
+                """{"hourly":{"time":[1907661600],"temperature_2m":[9.9],"precipitation_probability":[10],"precipitation":[0.0]}}""")
+            .GetForecastAsync(at, cancellationToken));
+        Assert.Null(await ProviderReturning("{}").GetForecastAsync(at, cancellationToken));
+        // Present hour, but no usable temperature — the one value the reminder cannot do without.
+        Assert.Null(await ProviderReturning(
+                """{"hourly":{"time":[1907748000],"temperature_2m":[null],"precipitation":[0.0]}}""")
+            .GetForecastAsync(at, cancellationToken));
+    }
+
+    [Fact]
+    public async Task OpenMeteoWeatherForecastProvider_Throws_OnUpstreamError()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var handler = new DelegateHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = new StringContent("""{"error":true,"reason":"bad latitude"}""", Encoding.UTF8, "application/json")
+        }));
+        var provider = new OpenMeteoWeatherForecastProvider(
+            new HttpClient(handler),
+            Microsoft.Extensions.Options.Options.Create(new WeatherOptions()),
+            NullLogger<OpenMeteoWeatherForecastProvider>.Instance);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(
+            () => provider.GetForecastAsync(new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero), cancellationToken));
+        Assert.Equal(HttpStatusCode.BadRequest, ex.StatusCode);
+        Assert.Contains("bad latitude", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -975,6 +1168,42 @@ public class UnitTests
         null,
         reminder24hJobId,
         reminder2hJobId);
+
+    private static IWeatherForecastProvider StubWeather(WeatherForecast? forecast)
+    {
+        var weather = new Mock<IWeatherForecastProvider>();
+        weather.Setup(x => x.GetForecastAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(forecast);
+        return weather.Object;
+    }
+
+    private static Mock<IBookingCancellationLinkRepository> ActiveLinkRepository(DateTimeOffset slotStart, string reminderType)
+    {
+        var link = new BookingCancellationLink(
+            BasicDomainConfig(),
+            new BookingSlot(slotStart),
+            5,
+            10,
+            "skedda-1",
+            DateTimeOffset.UtcNow,
+            null,
+            null,
+            null);
+        var links = new Mock<IBookingCancellationLinkRepository>();
+        links.Setup(x => x.GetByMessageAsync(5, 10, It.IsAny<CancellationToken>())).ReturnsAsync(link);
+        links.Setup(x => x.TryMarkReminderSentAsync(5, 10, reminderType, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        return links;
+    }
+
+    private static OpenMeteoWeatherForecastProvider ProviderReturning(string json)
+        => new(
+            new HttpClient(new DelegateHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            }))),
+            Microsoft.Extensions.Options.Options.Create(new WeatherOptions()),
+            NullLogger<OpenMeteoWeatherForecastProvider>.Instance);
 
     private static DefaultHttpContext NewHttp()
     {

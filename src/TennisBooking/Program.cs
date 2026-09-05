@@ -21,15 +21,26 @@ using TennisBooking.Infrastructure.Persistence;
 using TennisBooking.Infrastructure.Scheduling;
 using TennisBooking.Infrastructure.Skedda;
 using TennisBooking.Infrastructure.Telegram;
+using TennisBooking.Infrastructure.Weather;
 using TennisBooking.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddEnvironmentVariables();
 var skeddaConfig = builder.Configuration.GetSection("SkeddaConfig");
 var telegramConfig = builder.Configuration.GetSection("Telegram");
+var weatherConfig = builder.Configuration.GetSection("Weather");
 builder.Services.Configure<SkeddaOptions>(skeddaConfig);
 builder.Services.Configure<TelegramOptions>(telegramConfig);
+builder.Services.Configure<WeatherOptions>(weatherConfig);
 builder.Services.AddHttpClient<TelegramNotificationSender>();
+// Open-Meteo is only ever called from a reminder job, well off any hot path, so the default handler
+// (and its default pooling) is fine; the short timeout is what keeps a stalled forecast from holding
+// up the reminder it decorates.
+builder.Services.AddHttpClient<IWeatherForecastProvider, OpenMeteoWeatherForecastProvider>((sp, client) =>
+{
+    var opts = sp.GetRequiredService<IOptions<WeatherOptions>>().Value;
+    client.Timeout = TimeSpan.FromSeconds(opts.RequestTimeoutSeconds);
+});
 
 // Pooled, keep-alive HttpClients for the latency-critical Skedda booking POST — one per burst "pipe".
 // The burst spreads its shots across several INDEPENDENT connections so shot i never shares a TCP/HTTP-2
