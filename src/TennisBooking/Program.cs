@@ -33,10 +33,10 @@ builder.Services.Configure<SkeddaOptions>(skeddaConfig);
 builder.Services.Configure<TelegramOptions>(telegramConfig);
 builder.Services.Configure<WeatherOptions>(weatherConfig);
 builder.Services.AddHttpClient<TelegramNotificationSender>();
-// Open-Meteo is only ever called from a reminder job, well off any hot path, so the default handler
+// WeatherAPI.com is only ever called from a reminder job, well off any hot path, so the default handler
 // (and its default pooling) is fine; the short timeout is what keeps a stalled forecast from holding
 // up the reminder it decorates.
-builder.Services.AddHttpClient<IWeatherForecastProvider, OpenMeteoWeatherForecastProvider>((sp, client) =>
+builder.Services.AddHttpClient<IWeatherForecastProvider, WeatherApiWeatherForecastProvider>((sp, client) =>
 {
     var opts = sp.GetRequiredService<IOptions<WeatherOptions>>().Value;
     client.Timeout = TimeSpan.FromSeconds(opts.RequestTimeoutSeconds);

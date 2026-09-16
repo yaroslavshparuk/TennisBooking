@@ -8,8 +8,15 @@ public class WeatherOptions
     /// </summary>
     public bool Enabled { get; set; } = true;
 
-    /// <summary>Open-Meteo base URL. The free tier needs no API key.</summary>
-    public string ApiBaseUrl { get; set; } = "https://api.open-meteo.com";
+    /// <summary>WeatherAPI.com base URL.</summary>
+    public string ApiBaseUrl { get; set; } = "https://api.weatherapi.com/v1";
+
+    /// <summary>
+    /// WeatherAPI.com key (register at https://www.weatherapi.com/signup.aspx; the free plan needs no
+    /// card). Also settable via the Weather__ApiKey environment variable. Empty means the provider
+    /// degrades to "no forecast line" rather than failing reminders.
+    /// </summary>
+    public string ApiKey { get; set; } = string.Empty;
 
     /// <summary>Court coordinates. Defaults to Kyiv, where the Galaktyka venue is.</summary>
     public double Latitude { get; set; } = 50.4501;

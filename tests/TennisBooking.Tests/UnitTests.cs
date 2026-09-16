@@ -573,7 +573,7 @@ public class UnitTests
         var notification = new Mock<INotificationSender>();
         var weather = new Mock<IWeatherForecastProvider>();
         weather.Setup(x => x.GetForecastAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new HttpRequestException("open-meteo is down"));
+            .ThrowsAsync(new HttpRequestException("weather provider is down"));
         var useCase = new AttendanceReminderUseCase(
             links.Object,
             notification.Object,
@@ -595,7 +595,7 @@ public class UnitTests
     }
 
     [Fact]
-    public async Task OpenMeteoWeatherForecastProvider_ReadsTheHourTheBookingStartsIn()
+    public async Task WeatherApiWeatherForecastProvider_ReadsTheHourTheBookingStartsIn()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         Uri? requested = null;
@@ -605,15 +605,12 @@ public class UnitTests
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(
-                    """{"hourly":{"time":[1907744400,1907748000],"temperature_2m":[9.9,11.4],"precipitation_probability":[10,80],"precipitation":[0.0,1.2]}}""",
+                    WeatherApiEnvelope((1907744400, 9.9, 10, 0.0), (1907748000, 11.4, 80, 1.2)),
                     Encoding.UTF8,
                     "application/json")
             });
         });
-        var provider = new OpenMeteoWeatherForecastProvider(
-            new HttpClient(handler),
-            Microsoft.Extensions.Options.Options.Create(new WeatherOptions()),
-            NullLogger<OpenMeteoWeatherForecastProvider>.Instance);
+        var provider = ProviderWithOptions(new WeatherOptions { ApiKey = "test-key" }, handler);
 
         // 1907748000 = 2030-06-15T10:00:00Z; the minutes are dropped so the containing hour is used.
         var forecast = await provider.GetForecastAsync(
@@ -626,72 +623,67 @@ public class UnitTests
         Assert.Equal(1.2, forecast.PrecipitationMm);
         Assert.True(forecast.IsRainExpected);
         var query = requested!.Query;
-        Assert.Contains("start_hour=2030-06-15T10%3A00", query, StringComparison.Ordinal);
-        Assert.Contains("end_hour=2030-06-15T11%3A00", query, StringComparison.Ordinal);
-        Assert.Contains("timeformat=unixtime", query, StringComparison.Ordinal);
+        Assert.Contains("key=test-key", query, StringComparison.Ordinal);
+        Assert.Contains("days=3", query, StringComparison.Ordinal);
+        Assert.Contains("q=50.4501%2C30.5234", query, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task OpenMeteoWeatherForecastProvider_FlagsRain_FromAccumulationAloneAndReportsDryOtherwise()
+    public async Task WeatherApiWeatherForecastProvider_FlagsRain_FromAccumulationAloneAndReportsDryOtherwise()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        var provider = ProviderReturning(
-            """{"hourly":{"time":[1907748000],"temperature_2m":[14.0],"precipitation_probability":[15],"precipitation":[0.6]}}""");
+        var provider = ProviderReturning(WeatherApiEnvelope((1907748000, 14.0, 15, 0.6)));
 
         var rainy = await provider.GetForecastAsync(new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero), cancellationToken);
 
         // 15% is below the probability threshold, but 0.6 mm is above the accumulation one.
         Assert.True(rainy!.IsRainExpected);
 
-        var dry = await ProviderReturning(
-                """{"hourly":{"time":[1907748000],"temperature_2m":[14.0],"precipitation_probability":null,"precipitation":[0.0]}}""")
+        var dry = await ProviderReturning(WeatherApiEnvelope((1907748000, 14.0, null, 0.0)))
             .GetForecastAsync(new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero), cancellationToken);
 
-        // A null probability array contributes nothing rather than failing the lookup.
+        // A missing chance_of_rain contributes nothing rather than failing the lookup.
         Assert.False(dry!.IsRainExpected);
         Assert.Equal(0, dry.PrecipitationProbabilityPercent);
     }
 
     [Fact]
-    public async Task OpenMeteoWeatherForecastProvider_ReturnsNull_WhenDisabledOrHourMissing()
+    public async Task WeatherApiWeatherForecastProvider_ReturnsNull_WhenDisabledOrKeyMissingOrHourMissing()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var at = new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero);
 
-        var disabled = new OpenMeteoWeatherForecastProvider(
-            new HttpClient(new DelegateHandler((_, _) => throw new InvalidOperationException("must not be called"))),
-            Microsoft.Extensions.Options.Options.Create(new WeatherOptions { Enabled = false }),
-            NullLogger<OpenMeteoWeatherForecastProvider>.Instance);
+        var disabled = ProviderWithOptions(new WeatherOptions { Enabled = false, ApiKey = "test-key" });
         Assert.Null(await disabled.GetForecastAsync(at, cancellationToken));
 
-        // Hour outside the response, and a response with no hourly block at all.
-        Assert.Null(await ProviderReturning(
-                """{"hourly":{"time":[1907661600],"temperature_2m":[9.9],"precipitation_probability":[10],"precipitation":[0.0]}}""")
+        // No API key configured: no request is made and the reminder simply gets no forecast line.
+        var keyless = ProviderWithOptions(new WeatherOptions());
+        Assert.Null(await keyless.GetForecastAsync(at, cancellationToken));
+
+        // Hour outside the response, and a response with no forecast block at all.
+        Assert.Null(await ProviderReturning(WeatherApiEnvelope((1907661600, 9.9, 10, 0.0)))
             .GetForecastAsync(at, cancellationToken));
         Assert.Null(await ProviderReturning("{}").GetForecastAsync(at, cancellationToken));
         // Present hour, but no usable temperature — the one value the reminder cannot do without.
         Assert.Null(await ProviderReturning(
-                """{"hourly":{"time":[1907748000],"temperature_2m":[null],"precipitation":[0.0]}}""")
+                """{"forecast":{"forecastday":[{"date":"2030-06-15","hour":[{"time_epoch":1907748000,"precip_mm":0.0}]}]}}""")
             .GetForecastAsync(at, cancellationToken));
     }
 
     [Fact]
-    public async Task OpenMeteoWeatherForecastProvider_Throws_OnUpstreamError()
+    public async Task WeatherApiWeatherForecastProvider_Throws_OnUpstreamError()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var handler = new DelegateHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest)
         {
-            Content = new StringContent("""{"error":true,"reason":"bad latitude"}""", Encoding.UTF8, "application/json")
+            Content = new StringContent("""{"error":{"message":"API key is invalid"}}""", Encoding.UTF8, "application/json")
         }));
-        var provider = new OpenMeteoWeatherForecastProvider(
-            new HttpClient(handler),
-            Microsoft.Extensions.Options.Options.Create(new WeatherOptions()),
-            NullLogger<OpenMeteoWeatherForecastProvider>.Instance);
+        var provider = ProviderWithOptions(new WeatherOptions { ApiKey = "test-key" }, handler);
 
         var ex = await Assert.ThrowsAsync<HttpRequestException>(
             () => provider.GetForecastAsync(new DateTimeOffset(2030, 6, 15, 10, 0, 0, TimeSpan.Zero), cancellationToken));
         Assert.Equal(HttpStatusCode.BadRequest, ex.StatusCode);
-        Assert.Contains("bad latitude", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("API key is invalid", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1196,14 +1188,30 @@ public class UnitTests
         return links;
     }
 
-    private static OpenMeteoWeatherForecastProvider ProviderReturning(string json)
+    private static WeatherApiWeatherForecastProvider ProviderReturning(string json)
+        => ProviderWithOptions(new WeatherOptions { ApiKey = "test-key" }, StubJsonHandler(json));
+
+    private static WeatherApiWeatherForecastProvider ProviderWithOptions(WeatherOptions options, HttpMessageHandler? handler = null)
         => new(
-            new HttpClient(new DelegateHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(json, Encoding.UTF8, "application/json")
-            }))),
-            Microsoft.Extensions.Options.Options.Create(new WeatherOptions()),
-            NullLogger<OpenMeteoWeatherForecastProvider>.Instance);
+            new HttpClient(handler ?? new DelegateHandler((_, _) => throw new InvalidOperationException("must not be called"))),
+            Microsoft.Extensions.Options.Options.Create(options),
+            NullLogger<WeatherApiWeatherForecastProvider>.Instance);
+
+    private static DelegateHandler StubJsonHandler(string json)
+        => new((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json")
+        }));
+
+    private static string WeatherApiEnvelope(params (long Epoch, double TempC, int? Chance, double PrecipMm)[] hours)
+    {
+        static string Number(double value) => value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var entries = hours.Select(h =>
+            h.Chance.HasValue
+                ? $$"""{"time_epoch":{{h.Epoch}},"temp_c":{{Number(h.TempC)}},"chance_of_rain":{{h.Chance}},"precip_mm":{{Number(h.PrecipMm)}}}"""
+                : $$"""{"time_epoch":{{h.Epoch}},"temp_c":{{Number(h.TempC)}},"precip_mm":{{Number(h.PrecipMm)}}}""");
+        return $$"""{"forecast":{"forecastday":[{"date":"2030-06-15","hour":[{{string.Join(",", entries)}}]}]}}""";
+    }
 
     private static DefaultHttpContext NewHttp()
     {
