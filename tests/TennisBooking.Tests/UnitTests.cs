@@ -1207,10 +1207,11 @@ public class UnitTests
     {
         static string Number(double value) => value.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var entries = hours.Select(h =>
-            h.Chance.HasValue
-                ? $$"""{"time_epoch":{{h.Epoch}},"temp_c":{{Number(h.TempC)}},"chance_of_rain":{{h.Chance}},"precip_mm":{{Number(h.PrecipMm)}}}"""
-                : $$"""{"time_epoch":{{h.Epoch}},"temp_c":{{Number(h.TempC)}},"precip_mm":{{Number(h.PrecipMm)}}}""");
-        return $$"""{"forecast":{"forecastday":[{"date":"2030-06-15","hour":[{{string.Join(",", entries)}}]}]}}""";
+            "{\"time_epoch\":" + h.Epoch +
+            ",\"temp_c\":" + Number(h.TempC) +
+            (h.Chance.HasValue ? ",\"chance_of_rain\":" + h.Chance : string.Empty) +
+            ",\"precip_mm\":" + Number(h.PrecipMm) + "}");
+        return "{\"forecast\":{\"forecastday\":[{\"date\":\"2030-06-15\",\"hour\":[" + string.Join(",", entries) + "]}]}}";
     }
 
     private static DefaultHttpContext NewHttp()
