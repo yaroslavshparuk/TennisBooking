@@ -113,7 +113,7 @@ public sealed class WeatherApiWeatherForecastProvider : IWeatherForecastProvider
 
                 // temp_c is the only value the reminder cannot do without; a missing chance of rain
                 // or accumulation just means that signal contributes nothing to the rain decision.
-                if (!ReadDouble(hour, "temp_c") is { } temperature)
+                if (ReadDouble(hour, "temp_c") is not { } temperature)
                     return null;
 
                 var probability = (int)Math.Round(ReadRainChance(hour));
