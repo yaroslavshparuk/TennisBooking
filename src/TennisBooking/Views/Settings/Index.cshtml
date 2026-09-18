@@ -92,16 +92,6 @@
             font: 800 .9rem ui-sans-serif, "Avenir Next", "Segoe UI", sans-serif;
         }
 
-        .userbar {
-            display: flex;
-            justify-content: flex-end;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 18px;
-            color: var(--muted);
-            font: 600 .9rem ui-sans-serif, "Avenir Next", "Segoe UI", sans-serif;
-        }
-
         .panel {
             position: relative;
             overflow: hidden;
@@ -156,14 +146,6 @@
             <h1>Розклад бронювання корту у Галактиці</h1>
         </div>
         <a class="dashboard-link" href="/hangfire">Панель Hangfire</a>
-    </section>
-
-    <section class="userbar" aria-label="Користувач">
-        <span>@(User.Identity?.Name ?? "?")</span>
-        <form method="post" action="/logout" style="display:inline">
-            @Html.AntiForgeryToken()
-            <button type="submit" class="dashboard-link">Вийти</button>
-        </form>
     </section>
 
     <section class="panel" aria-label="Розклади бронювання">
