@@ -81,6 +81,27 @@ builder.Services.AddAuthentication(options =>
             options.Scope.Add(scope);
         options.CallbackPath = "/signin-oidc";
         options.SignedOutCallbackPath = "/signout-callback-oidc";
+        // Behind stacked proxies the incoming host/scheme can't be trusted for the
+        // redirect_uri the provider checks byte-for-byte. Pin it when configured.
+        var loginRedirect = authOptions.GetRedirectUri(options.CallbackPath.Value ?? "/signin-oidc");
+        var logoutRedirect = authOptions.GetRedirectUri(options.SignedOutCallbackPath.Value ?? "/signout-callback-oidc");
+        if (loginRedirect is not null)
+        {
+            options.Events = new OpenIdConnectEvents
+            {
+                OnRedirectToIdentityProvider = context =>
+                {
+                    context.ProtocolMessage.RedirectUri = loginRedirect;
+                    return Task.CompletedTask;
+                },
+                OnRedirectToIdentityProviderForSignOut = context =>
+                {
+                    if (logoutRedirect is not null)
+                        context.ProtocolMessage.PostLogoutRedirectUri = logoutRedirect;
+                    return Task.CompletedTask;
+                }
+            };
+        }
     });
 
 // Everything is private by default: any endpoint without [AllowAnonymous]

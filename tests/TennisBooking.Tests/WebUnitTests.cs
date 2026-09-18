@@ -73,6 +73,18 @@ public sealed class AuthOptionsTests
         Assert.Equal(new[] { "openid", "profile", "email" }, options.Scopes);
         Assert.Equal("name", options.NameClaimType);
         Assert.True(options.RequireHttpsMetadata);
+        Assert.Equal(string.Empty, options.PublicBaseUrl);
+        Assert.Null(options.GetRedirectUri("/signin-oidc"));
+    }
+
+    [Theory]
+    [InlineData("https://tennis.example.com", "/signin-oidc", "https://tennis.example.com/signin-oidc")]
+    [InlineData("https://tennis.example.com/", "/signout-callback-oidc", "https://tennis.example.com/signout-callback-oidc")]
+    public void GetRedirectUri_PinsAbsoluteUri_WhenPublicBaseUrlSet(string baseUrl, string path, string expected)
+    {
+        var options = new AuthOptions { PublicBaseUrl = baseUrl };
+
+        Assert.Equal(expected, options.GetRedirectUri(path));
     }
 }
 

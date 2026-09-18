@@ -26,6 +26,7 @@ username/password is gone).
    | `Auth:ClientId` | `Auth__ClientId` | `tennis-booking` |
    | `Auth:ClientSecret` | `Auth__ClientSecret` | (secret, env var only) |
    | `Auth:Scopes` | `Auth__Scopes__0…` | `openid`, `profile`, `email` |
+   | `Auth:PublicBaseUrl` | `Auth__PublicBaseUrl` | `https://tennis.example.com` (pin login redirect origin behind proxies) |
 
    To switch providers later, just point `Auth:Authority`/`ClientId`/`ClientSecret`
 at the new issuer — no code changes needed.

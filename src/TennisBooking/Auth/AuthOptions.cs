@@ -27,4 +27,16 @@ public sealed class AuthOptions
 
     /// <summary>Set to false only for plain-http test issuers. Always true in production.</summary>
     public bool RequireHttpsMetadata { get; set; } = true;
+
+    /// <summary>
+    /// Public base URL of this app, e.g. https://tennis.example.com.
+    /// Set when the app sits behind proxies that don't preserve the original host/scheme,
+    /// so login/logout redirects always use this origin instead of the incoming request.
+    /// Empty (default) means derive the redirect URI from the incoming request.
+    /// </summary>
+    public string PublicBaseUrl { get; set; } = string.Empty;
+
+    /// <summary>Absolute redirect URI for the given callback path, or null to derive from the request.</summary>
+    public string? GetRedirectUri(string callbackPath) =>
+        string.IsNullOrWhiteSpace(PublicBaseUrl) ? null : PublicBaseUrl.TrimEnd('/') + callbackPath;
 }
