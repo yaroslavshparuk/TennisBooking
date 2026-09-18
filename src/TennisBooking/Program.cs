@@ -313,6 +313,7 @@ app.UseHangfireDashboard("/hangfire", new DashboardOptions
     }
 });
 app.UseEndpoints(endpoints => {
+    endpoints.MapGet("/", () => Results.Redirect("/settings")).AllowAnonymous();
     endpoints.MapControllerRoute(
         name: "default",
         pattern: "{controller=Settings}/{action=Index}/{id?}");
