@@ -12,6 +12,10 @@ using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Npgsql;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.HttpOverrides;
 using TennisBooking.Auth;
 using TennisBooking.Application.Abstractions;
 using TennisBooking.Application.Booking;
@@ -32,6 +36,58 @@ var weatherConfig = builder.Configuration.GetSection("Weather");
 builder.Services.Configure<SkeddaOptions>(skeddaConfig);
 builder.Services.Configure<TelegramOptions>(telegramConfig);
 builder.Services.Configure<WeatherOptions>(weatherConfig);
+builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
+
+// Behind a homeserver reverse proxy the app sees http; forwarded headers restore the
+// public https scheme/host so OIDC redirect_uri and cookies are generated correctly.
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownIPNetworks.Clear();
+    options.KnownProxies.Clear();
+});
+
+var authOptions = builder.Configuration.GetSection(AuthOptions.SectionName).Get<AuthOptions>()
+    ?? throw new InvalidOperationException("Missing configuration section 'Auth'.");
+if (string.IsNullOrWhiteSpace(authOptions.Authority))
+    throw new InvalidOperationException("Auth:Authority is not configured.");
+if (string.IsNullOrWhiteSpace(authOptions.ClientId))
+    throw new InvalidOperationException("Auth:ClientId is not configured.");
+
+builder.Services.AddAuthentication(options =>
+    {
+        options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+        options.DefaultChallengeScheme = OpenIdConnectDefaults.AuthenticationScheme;
+    })
+    .AddCookie(options =>
+    {
+        options.ExpireTimeSpan = TimeSpan.FromHours(12);
+        options.SlidingExpiration = true;
+    })
+    .AddOpenIdConnect(options =>
+    {
+        options.Authority = authOptions.Authority;
+        options.ClientId = authOptions.ClientId;
+        options.ClientSecret = authOptions.ClientSecret;
+        options.ResponseType = "code";
+        options.UsePkce = true;
+        options.RequireHttpsMetadata = authOptions.RequireHttpsMetadata;
+        options.SaveTokens = true;
+        options.GetClaimsFromUserInfoEndpoint = true;
+        options.MapInboundClaims = false;
+        options.TokenValidationParameters.NameClaimType = authOptions.NameClaimType;
+        options.Scope.Clear();
+        foreach (var scope in authOptions.Scopes.Where(s => !string.IsNullOrWhiteSpace(s)))
+            options.Scope.Add(scope);
+        options.CallbackPath = "/signin-oidc";
+        options.SignedOutCallbackPath = "/signout-callback-oidc";
+    });
+
+// Everything is private by default: any endpoint without [AllowAnonymous]
+// (pages, controllers, Hangfire via its own filter below) requires OIDC sign-in.
+// Health probes are explicitly anonymous (see MapHealthChecks below).
+builder.Services.AddAuthorizationBuilder()
+    .SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build());
 builder.Services.AddHttpClient<TelegramNotificationSender>();
 // WeatherAPI.com is only ever called from a reminder job, well off any hot path, so the default handler
 // (and its default pooling) is fine; the short timeout is what keeps a stalled forecast from holding
@@ -223,13 +279,16 @@ using (var scope = app.Services.CreateScope())
     await db.Database.MigrateAsync();
 }
 
+app.UseForwardedHeaders();
 app.UseStaticFiles();
 app.UseRouting();
+app.UseAuthentication();
+app.UseAuthorization();
 app.UseHangfireDashboard("/hangfire", new DashboardOptions
 {
     Authorization = new[]
     {
-        new HangfireBasicAuthFilter(builder.Configuration["Hangfire:DashboardUser"], builder.Configuration["Hangfire:DashboardPass"])
+        new HangfireOidcDashboardAuthFilter()
     }
 });
 app.UseEndpoints(endpoints => {
@@ -240,8 +299,8 @@ app.UseEndpoints(endpoints => {
     endpoints.MapHealthChecks("/health", new HealthCheckOptions
     {
         Predicate = _ => false
-    });
-    endpoints.MapHealthChecks("/health/ready");
+    }).AllowAnonymous();
+    endpoints.MapHealthChecks("/health/ready").AllowAnonymous();
 });
 using (var scope = app.Services.CreateScope()) {
     var scheduler = scope.ServiceProvider.GetRequiredService<ScheduleBookingsUseCase>();

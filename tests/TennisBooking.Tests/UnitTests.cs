@@ -1,4 +1,5 @@
 using System.Net;
+using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using Hangfire;
@@ -938,30 +939,19 @@ public class UnitTests
     }
 
     [Fact]
-    public void HangfireBasicAuthFilter_AuthorizationCases()
+    public void HangfireOidcDashboardAuthFilter_AllowsOnlyAuthenticatedUsers()
     {
-        var filter = new HangfireBasicAuthFilter("user", "pass");
+        var filter = new HangfireOidcDashboardAuthFilter();
         var storage = new Mock<Hangfire.JobStorage>().Object;
         var options = new DashboardOptions();
 
-        var ctxNoHeader = NewHttp();
-        Assert.False(filter.Authorize(new AspNetCoreDashboardContext(storage, options, ctxNoHeader)));
+        var anonymous = NewHttp();
+        Assert.False(filter.Authorize(new AspNetCoreDashboardContext(storage, options, anonymous)));
 
-        var httpBadScheme = NewHttp();
-        httpBadScheme.Request.Headers.Authorization = "Bearer abc";
-        Assert.False(filter.Authorize(new AspNetCoreDashboardContext(storage, options, httpBadScheme)));
-
-        var httpBadCreds = NewHttp();
-        httpBadCreds.Request.Headers.Authorization = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("user:nope"));
-        Assert.False(filter.Authorize(new AspNetCoreDashboardContext(storage, options, httpBadCreds)));
-
-        var httpBadBase64 = NewHttp();
-        httpBadBase64.Request.Headers.Authorization = "Basic not-base64";
-        Assert.False(filter.Authorize(new AspNetCoreDashboardContext(storage, options, httpBadBase64)));
-
-        var httpGood = NewHttp();
-        httpGood.Request.Headers.Authorization = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("user:pass"));
-        Assert.True(filter.Authorize(new AspNetCoreDashboardContext(storage, options, httpGood)));
+        var authenticated = NewHttp();
+        authenticated.User = new ClaimsPrincipal(
+            new ClaimsIdentity([new Claim("name", "user")], authenticationType: "oidc"));
+        Assert.True(filter.Authorize(new AspNetCoreDashboardContext(storage, options, authenticated)));
     }
 
     private static ApplicationDbContext NewInMemoryDb()
