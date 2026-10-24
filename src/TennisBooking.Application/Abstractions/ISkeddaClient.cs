@@ -15,5 +15,11 @@ public interface ISkeddaClient
     /// </summary>
     Task<SkeddaWarmupResult> WarmupAsync(PreparedBooking booking, int pipeId, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Cancels a Skedda booking. Throws <see cref="SkeddaBookingRejectedException"/> when Skedda rejects
+    /// the cancellation for a business reason (e.g. the booking is locked in); any other failure
+    /// surfaces as <see cref="HttpRequestException"/> (or <see cref="InvalidOperationException"/> for
+    /// broken auth state) so the caller can tell "can't cancel online" apart from infra problems.
+    /// </summary>
     Task CancelAsync(PreparedBooking booking, string bookingId, CancellationToken cancellationToken);
 }

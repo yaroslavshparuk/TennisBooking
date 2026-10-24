@@ -59,6 +59,53 @@ public sealed class BookingRulesTests
     }
 
     [Fact]
+    public void BookingOpensAt_CrossesAutumnDstTransition_AtSameWallTime()
+    {
+        // Slot Wed Nov 4 2026 19:00 Kyiv (winter, +02). Booking opens Oct 21 19:00 Kyiv
+        // (summer, +03) = 16:00Z. The naive StartTime.AddDays(-14) keeps +02 and lands on
+        // Oct 21 17:00Z = 20:00 Kyiv: one hour late, a complete miss.
+        var kyiv = KyivZoneOrSkip();
+        if (kyiv is null)
+            return;
+
+        var start = new DateTimeOffset(2026, 11, 4, 19, 0, 0, kyiv.GetUtcOffset(new DateTime(2026, 11, 4, 19, 0, 0)));
+        var slot = new BookingSlot(start);
+
+        var expected = new DateTimeOffset(2026, 10, 21, 19, 0, 0, kyiv.GetUtcOffset(new DateTime(2026, 10, 21, 19, 0, 0)));
+        Assert.Equal(expected, slot.BookingOpensAt);
+        Assert.Equal(new DateTimeOffset(2026, 10, 21, 16, 0, 0, TimeSpan.Zero), slot.BookingOpensAt.ToUniversalTime());
+    }
+
+    [Fact]
+    public void BookingOpensAt_CrossesSpringDstTransition_AtSameWallTime()
+    {
+        // Slot Wed Apr 8 2026 19:00 Kyiv (summer, +03). Booking opens Mar 25 19:00 Kyiv
+        // (winter, +02) = 17:00Z; naive math would give 16:00Z = 18:00 Kyiv.
+        var kyiv = KyivZoneOrSkip();
+        if (kyiv is null)
+            return;
+
+        var start = new DateTimeOffset(2026, 4, 8, 19, 0, 0, kyiv.GetUtcOffset(new DateTime(2026, 4, 8, 19, 0, 0)));
+        var slot = new BookingSlot(start);
+
+        var expected = new DateTimeOffset(2026, 3, 25, 19, 0, 0, kyiv.GetUtcOffset(new DateTime(2026, 3, 25, 19, 0, 0)));
+        Assert.Equal(expected, slot.BookingOpensAt);
+        Assert.Equal(new DateTimeOffset(2026, 3, 25, 17, 0, 0, TimeSpan.Zero), slot.BookingOpensAt.ToUniversalTime());
+    }
+
+    private static TimeZoneInfo? KyivZoneOrSkip()
+    {
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("Europe/Kyiv");
+        }
+        catch
+        {
+            return null; // no TZDB on this host; servers and CI have it
+        }
+    }
+
+    [Fact]
     public void DeduplicationStore_RejectsDuplicate_UntilReleased()
     {
         var store = new InMemoryBookingDeduplicationStore();

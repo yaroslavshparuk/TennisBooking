@@ -64,8 +64,31 @@ public sealed class TelegramLongPollingService : BackgroundService
                             _logger.LogInformation("Received {Count} Telegram updates starting from offset {Offset}", updates.Count, offset);
                         foreach (var update in updates)
                         {
+                            try
+                            {
+                                await ProcessUpdateAsync(update, stoppingToken);
+                            }
+                            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                            {
+                                // Graceful shutdown: let the outer handler deal with it instead of
+                                // burying it as a per-update error and advancing past real work.
+                                throw;
+                            }
+                            catch (Exception ex)
+                            {
+                                // Business rejections (e.g. locked-in cancel) are handled inside
+                                // ProcessUpdateAsync via status codes and never reach here. What remains
+                                // is transient infra (Skedda 5xx/timeout, Postgres, Telegram API): do NOT
+                                // advance the offset so the update is retried on the next poll, and back
+                                // off so a persistent outage doesn't hot-loop. Cancel handling is
+                                // idempotent (TryMarkCancelled latch -> AlreadyCancelled), so a retry after
+                                // a cancel-succeeded-but-notify-failed crash safely ends as
+                                // "already cancelled" instead of double-booking Skedda.
+                                _logger.LogWarning(ex, "Transient failure processing Telegram update {UpdateId}; will retry", update.UpdateId);
+                                await Task.Delay(TimeSpan.FromSeconds(3), stoppingToken);
+                                break;
+                            }
                             offset = Math.Max(offset, update.UpdateId + 1);
-                            await ProcessUpdateAsync(update, stoppingToken);
                             await SaveOffsetAsync(update.UpdateId, stoppingToken);
                         }
                     }
@@ -278,6 +301,15 @@ public sealed class TelegramLongPollingService : BackgroundService
                 "Skipping /cancel message {MessageId}: booking already cancelled",
                 message.MessageId);
             await notification.NotifyMessageAsync("Це бронювання вже скасовано.", cancellationToken, repliedMessageId.Value);
+            return;
+        }
+
+        if (status == CancelBookingStatus.NotCancellable)
+        {
+            _logger.LogInformation(
+                "Rejecting /cancel message {MessageId}: Skedda rejected cancellation (locked in or similar)",
+                message.MessageId);
+            await notification.NotifyMessageAsync("Не вдалось скасувати: Skedda не дозволяє скасувати це бронювання онлайн (locked in). Зверніться до адміністратора корту.", cancellationToken, repliedMessageId.Value);
             return;
         }
 

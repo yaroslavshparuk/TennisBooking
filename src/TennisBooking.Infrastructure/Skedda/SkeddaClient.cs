@@ -108,13 +108,7 @@ public sealed class SkeddaClient : ISkeddaClient
         {
             var status = (int)bookResp.StatusCode;
             var errorBody = await bookResp.Content.ReadAsStringAsync(cancellationToken);
-            // A client-side business rejection (slot already taken, not open yet, validation) is an
-            // expected race outcome and comes back as a NON-auth 4xx. Authentication (401/403), rate
-            // limiting (429) and server errors (5xx) are real failures the caller must not mistake for
-            // a normal lost race — regardless of what the response body happens to contain.
-            var expectedRejection = status is >= 400 and < 500
-                && status is not 401 and not 403 and not 429;
-            if (expectedRejection)
+            if (IsBusinessRejection(status))
                 throw new SkeddaBookingRejectedException(status, errorBody);
             throw new HttpRequestException($"Skedda booking failed with status {status}: {errorBody}");
         }
@@ -128,6 +122,16 @@ public sealed class SkeddaClient : ISkeddaClient
         _logger.LogInformation("Skedda booking succeeded with id {SkeddaBookingId}", bookingId);
         return new SkeddaBookingResult(bookingId, (int)bookResp.StatusCode);
     }
+
+    /// <summary>
+    /// A client-side business rejection (slot taken, not open yet, locked-in cancel) is an expected
+    /// NON-auth 4xx. Authentication (401/403), rate limiting (429) and server errors (5xx) are real
+    /// failures the caller must not mistake for a routine rejection — regardless of what the
+    /// response body happens to contain.
+    /// </summary>
+    private static bool IsBusinessRejection(int statusCode)
+        => statusCode is >= 400 and < 500
+            && statusCode is not 401 and not 403 and not 429;
 
     public async Task<SkeddaWarmupResult> WarmupAsync(PreparedBooking booking, int pipeId, CancellationToken cancellationToken)
     {
@@ -199,7 +203,13 @@ public sealed class SkeddaClient : ISkeddaClient
 
         var deleteResp = await client.SendAsync(deleteReq, cancellationToken);
         if (!deleteResp.IsSuccessStatusCode)
-            throw new HttpRequestException($"Response from Skedda {await deleteResp.Content.ReadAsStringAsync(cancellationToken)}");
+        {
+            var status = (int)deleteResp.StatusCode;
+            var errorBody = await deleteResp.Content.ReadAsStringAsync(cancellationToken);
+            if (IsBusinessRejection(status))
+                throw new SkeddaBookingRejectedException(status, errorBody);
+            throw new HttpRequestException($"Response from Skedda {errorBody}", null, deleteResp.StatusCode);
+        }
         _logger.LogInformation("Skedda cancellation succeeded for booking {SkeddaBookingId}", bookingId);
     }
 

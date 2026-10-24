@@ -43,7 +43,20 @@ public sealed class CancelBookingUseCase
                 string.Empty,
                 string.Empty,
                 string.Empty);
-            await _skedda.CancelAsync(prepared, link.SkeddaBookingId, cancellationToken);
+            try
+            {
+                await _skedda.CancelAsync(prepared, link.SkeddaBookingId, cancellationToken);
+            }
+            catch (SkeddaBookingRejectedException ex)
+            {
+                // Expected business outcome (e.g. Skedda "locked in" - online cancel not allowed).
+                // Do not mark the link cancelled and keep reminders - the booking still exists.
+                _logger.LogInformation(
+                    ex,
+                    "Skedda rejected cancellation for booking {SkeddaBookingId}",
+                    link.SkeddaBookingId);
+                return CancelBookingStatus.NotCancellable;
+            }
 
             var marked = await _links.TryMarkCancelledAsync(
                 chatId,
@@ -81,5 +94,6 @@ public enum CancelBookingStatus
 {
     NotFound,
     Cancelled,
-    AlreadyCancelled
+    AlreadyCancelled,
+    NotCancellable
 }
